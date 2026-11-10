@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package ipma.proxy.v1;
+
+// ProxyService is a starting point for the IPMA proxy API.
+service ProxyService {
+  // Ping checks that the service is responding.
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message PingRequest {}
+
+message PingResponse {
+  string message = 1;
+}
