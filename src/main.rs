@@ -24,6 +24,10 @@ struct Config {
         default_value = "127.0.0.1:50051"
     )]
     listen_addr: SocketAddr,
+
+    /// Tracing filter directives.
+    #[arg(long, env = "RUST_LOG", default_value = "ipma_proxy=info")]
+    log_filter: EnvFilter,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -54,12 +58,9 @@ impl ProxyService for Proxy {
 async fn main() -> anyhow::Result<()> {
     load_dotenv()?;
     let config = Config::parse();
-    let filter = match std::env::var("RUST_LOG") {
-        Ok(value) => EnvFilter::try_new(value).context("invalid RUST_LOG")?,
-        Err(std::env::VarError::NotPresent) => EnvFilter::new("ipma_proxy=info"),
-        Err(error) => return Err(error).context("invalid RUST_LOG"),
-    };
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(config.log_filter)
+        .init();
 
     tracing::info!(address = %config.listen_addr, "starting gRPC server");
     Server::builder()
