@@ -1,0 +1,21 @@
+{
+  "2026-11-10T12:00": {
+    "1001": {
+      "temperatura": "0.0",
+      "intensidadeVento": 0,
+      "intensidadeVentoKM": "0",
+      "idDireccVento": 0,
+      "precAcumulada": "-99.0",
+      "humidade": null,
+      "pressao": 1001.1,
+      "radiacao": -99
+    },
+    "1002": null
+  },
+  "2026-11-10T13:00": {
+    "1001": {
+      "temperatura": -2.5,
+      "humidade": 80
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "owner": "IPMA",
+  "country": "PT",
+  "data": [
+    {
+      "idRegiao": 1,
+      "idAreaAviso": "AVR",
+      "idConcelho": 5,
+      "globalIdLocal": 1010500,
+      "latitude": "40.6413",
+      "idDistrito": 1,
+      "local": "Aveiro",
+      "longitude": "-8.6535"
+    },
+    {
+      "idRegiao": 1,
+      "idAreaAviso": "BJA",
+      "idConcelho": 5,
+      "globalIdLocal": 1020500,
+      "latitude": "38.0200",
+      "idDistrito": 2,
+      "local": "Beja",
+      "longitude": "-7.8700"
+    }
+  ]
+}

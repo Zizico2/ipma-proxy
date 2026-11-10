@@ -1,0 +1,53 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -31.1301,
+          39.4582
+        ]
+      },
+      "type": "Feature",
+      "properties": {
+        "intensidadeVentoKM": 18.4,
+        "temperatura": 17.6,
+        "idEstacao": 1200501,
+        "pressao": 1006.3,
+        "humidade": 82.0,
+        "localEstacao": "Flores (Aeroporto)",
+        "precAcumulada": 0.2,
+        "idDireccVento": 8,
+        "radiacao": 567.6,
+        "time": "2026-11-10T14:00:00",
+        "intensidadeVento": 5.1,
+        "descDirVento": "NW"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -31.1136,
+          39.6739
+        ]
+      },
+      "type": "Feature",
+      "properties": {
+        "intensidadeVentoKM": 25.9,
+        "temperatura": 17.9,
+        "idEstacao": 1200502,
+        "pressao": 1005.7,
+        "humidade": 79.0,
+        "localEstacao": "Corvo (Aeródromo)",
+        "precAcumulada": 0.0,
+        "idDireccVento": 8,
+        "radiacao": 1763.6,
+        "time": "2026-11-10T14:00:00",
+        "intensidadeVento": 7.2,
+        "descDirVento": "NW"
+      }
+    }
+  ]
+}

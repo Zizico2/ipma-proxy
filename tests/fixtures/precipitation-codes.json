@@ -1,0 +1,16 @@
+{
+  "owner": "IPMA",
+  "country": "PT",
+  "data": [
+    {
+      "descClassPrecIntEN": "--",
+      "descClassPrecIntPT": "---",
+      "classPrecInt": "-99"
+    },
+    {
+      "descClassPrecIntEN": "No precipitation",
+      "descClassPrecIntPT": "Sem precipitação",
+      "classPrecInt": "0"
+    }
+  ]
+}

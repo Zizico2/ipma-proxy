@@ -1,0 +1,16 @@
+{
+  "owner": "IPMA",
+  "country": "PT",
+  "data": [
+    {
+      "descWeatherTypeEN": "--",
+      "descWeatherTypePT": "---",
+      "idWeatherType": -99
+    },
+    {
+      "descWeatherTypeEN": "No information",
+      "descWeatherTypePT": "Sem informação",
+      "idWeatherType": 0
+    }
+  ]
+}

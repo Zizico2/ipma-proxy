@@ -1,0 +1,16 @@
+{
+  "owner": "IPMA",
+  "country": "PT",
+  "data": [
+    {
+      "descClassWindSpeedDailyEN": "--",
+      "descClassWindSpeedDailyPT": "---",
+      "classWindSpeed": "-99"
+    },
+    {
+      "descClassWindSpeedDailyEN": "Weak",
+      "descClassWindSpeedDailyPT": "Fraco",
+      "classWindSpeed": "1"
+    }
+  ]
+}

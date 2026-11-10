@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node geobuf.mjs" },
+  "devDependencies": { "geobuf": "4.0.0", "pbf": "4.0.1" }
+}

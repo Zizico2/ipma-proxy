@@ -1,0 +1,18 @@
+[
+  {
+    "text": "Precipitação persistente, por vezes forte.",
+    "awarenessTypeName": "Precipitação",
+    "idAreaAviso": "BGC",
+    "startTime": "2026-11-11T09:00:00",
+    "awarenessLevelID": "orange",
+    "endTime": "2026-11-11T21:00:00"
+  },
+  {
+    "text": "",
+    "awarenessTypeName": "Agitação Marítima",
+    "idAreaAviso": "BGC",
+    "startTime": "2026-11-10T12:10:00",
+    "awarenessLevelID": "green",
+    "endTime": "2026-11-13T12:00:00"
+  }
+]

@@ -1,0 +1,30 @@
+[
+  {
+    "geometry": {
+      "type": "Point",
+      "coordinates": [
+        -7.821,
+        37.033
+      ]
+    },
+    "type": "Feature",
+    "properties": {
+      "idEstacao": 1210881,
+      "localEstacao": "Olhão, EPPO"
+    }
+  },
+  {
+    "geometry": {
+      "type": "Point",
+      "coordinates": [
+        -7.62050375,
+        37.12166968
+      ]
+    },
+    "type": "Feature",
+    "properties": {
+      "idEstacao": 1210883,
+      "localEstacao": "Tavira"
+    }
+  }
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "idRegiao": 1,
+    "idAreaAviso": "CBR",
+    "globalIdLocal": 1060526,
+    "idLocal": 302,
+    "latitude": "40.1417",
+    "local": "Figueira da Foz, Costa",
+    "longitude": "-8.8783"
+  },
+  {
+    "idRegiao": 1,
+    "idAreaAviso": "FAR",
+    "globalIdLocal": 1080526,
+    "idLocal": 306,
+    "latitude": "37.0017",
+    "local": "Faro, costa",
+    "longitude": "-8.0"
+  }
+]

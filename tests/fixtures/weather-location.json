@@ -1,0 +1,32 @@
+{
+  "owner": "IPMA",
+  "country": "PT",
+  "data": [
+    {
+      "precipitaProb": "100.0",
+      "tMin": "16.5",
+      "tMax": "19.6",
+      "predWindDir": "SW",
+      "idWeatherType": 23,
+      "classWindSpeed": 2,
+      "longitude": "-9.1286",
+      "forecastDate": "2026-11-10",
+      "classPrecInt": 3,
+      "latitude": "38.7660"
+    },
+    {
+      "precipitaProb": "100.0",
+      "tMin": "14.8",
+      "tMax": "20.3",
+      "predWindDir": "W",
+      "idWeatherType": 9,
+      "classWindSpeed": 2,
+      "longitude": "-9.1286",
+      "forecastDate": "2026-11-11",
+      "classPrecInt": 2,
+      "latitude": "38.7660"
+    }
+  ],
+  "globalIdLocal": 1110600,
+  "dataUpdate": "2026-11-10T16:31:02"
+}
