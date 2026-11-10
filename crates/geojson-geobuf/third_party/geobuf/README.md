@@ -12,7 +12,7 @@ validation leave the existing files intact. Requires Git, Bash and Buf.
 
 Review upstream wire changes against the Rust encoder and run `just interop`.
 The interoperability check uses the JavaScript decoder version pinned in
-`tests/interop/package.json`.
+`crates/geojson-geobuf/tests/interop/package.json` from the workspace root.
 
 The schema is an external proto2 wire contract. Keep its tags, defaults, enum
 numbers and packed fields intact; it is intentionally outside our Buf module.
@@ -28,4 +28,5 @@ instead of silently corrupting geometry. Empty FeatureCollections and empty
 GeometryCollections are supported. Coordinates use six decimal places; there
 is no reprojection, simplification or tiling.
 
-`tests/interop` verifies compatibility with the pinned Mapbox JavaScript decoder.
+The converter crate's `tests/interop` verifies compatibility with the pinned
+Mapbox JavaScript decoder.

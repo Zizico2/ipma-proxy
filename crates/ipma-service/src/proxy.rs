@@ -4,7 +4,10 @@ use std::{
 };
 
 use bytes::BytesMut;
-use ipma_proto::{MAX_MESSAGE_BYTES, v1::{self as pb, proxy_service_server::ProxyService}};
+use ipma_proto::{
+    MAX_MESSAGE_BYTES,
+    v1::{self as pb, proxy_service_server::ProxyService},
+};
 use moka::{Expiry, future::Cache};
 use reqwest::{Client, Url};
 use tokio::sync::Semaphore;

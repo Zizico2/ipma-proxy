@@ -5,6 +5,8 @@
 //! encoder supports null geometry by omitting a field marked `required` in its
 //! proto2 schema. Rewriting that schema as proto3 would change its defaults.
 
+#![doc = include_str!("../README.md")]
+
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 

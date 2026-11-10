@@ -9,8 +9,8 @@ let point = serde_json::json!({
     "type": "Point",
     "coordinates": [-9.1286, 38.7660]
 });
-let bytes = geojson_geobuf::encode(&point)?;
-# Ok::<(), geojson_geobuf::Error>(())
+let bytes = geojson_geobuf::encode(&point).expect("valid GeoJSON");
+assert!(!bytes.is_empty());
 ```
 
 Decode the result with Mapbox's JavaScript library:
@@ -18,7 +18,8 @@ Decode the result with Mapbox's JavaScript library:
 
 The encoder accepts GeoJSON geometry objects, Features and FeatureCollections.
 It preserves properties, feature IDs and foreign members. Coordinates use six
-decimal places without reprojection, simplification or tiling. Malformed shapes,+mixed coordinate dimensions, empty coordinate arrays, unclosed rings and
+decimal places without reprojection, simplification or tiling. Malformed shapes,
+mixed coordinate dimensions, empty coordinate arrays, unclosed rings and
 coordinates beyond JavaScript's safe integer range return `Error`. Empty
 FeatureCollections and GeometryCollections are supported.
 

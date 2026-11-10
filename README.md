@@ -5,6 +5,30 @@ Forecasts, measurements, warnings, seismic events, reference data and climate
 CSV files become typed protobuf messages. GeoJSON becomes standalone
 [Mapbox Geobuf](https://github.com/mapbox/geobuf) bytes.
 
+This repository is a Cargo workspace with four packages:
+
+| Crate | Responsibility | Workspace dependencies |
+| --- | --- | --- |
+| [`geojson-geobuf`](crates/geojson-geobuf) | Standalone GeoJSON validation and Mapbox Geobuf encoding | None |
+| [`ipma-proto`](crates/ipma-proto) | Versioned schemas, generated messages, clients/servers and descriptors | None |
+| [`ipma-service`](crates/ipma-service) | IPMA HTTP access, caching, data mappings and RPC implementation | `geojson-geobuf`, `ipma-proto` |
+| [`ipma-proxy`](crates/ipma-proxy) | CLI/env configuration, tracing, listeners, health, reflection and shutdown | `ipma-service`, `ipma-proto` |
+
+The converter can be built and used independently with only `serde_json` and
+`thiserror` as runtime dependencies. Clients can depend on `ipma-proto` without
+linking the upstream HTTP client or cache. Fetching, cache policy and IPMA data
+mapping stay together in the service crate because they share the dataset
+contract. Modules handle the smaller internal boundaries.
+
+This split follows the reusable library/CLI boundary in
+[Geozero](https://github.com/georust/geozero/blob/main/Cargo.toml), the separate
+protocol-related crates in [Tonic](https://github.com/grpc/grpc-rust/blob/master/Cargo.toml),
+and [Axum's shared workspace metadata and lints](https://github.com/tokio-rs/axum/blob/main/Cargo.toml).
+The root manifest owns dependency versions, package metadata, release profiles,
+and lints, using Cargo resolver 3. All crates share one lockfile and target
+directory. The default member is the server, so `cargo run` starts the proxy;
+`just check`, `just lint`, `just test` and `just build` cover the entire workspace.
+
 Run `just run` (or `cargo run --locked`) to listen on `127.0.0.1:50051`.
 Rust is pinned in `rust-toolchain.toml`; protobuf generation uses protox and
 requires neither protoc nor Buf. `just release` builds with thin LTO and one
@@ -17,13 +41,14 @@ cp .env.example .env
 just run
 # In another terminal:
 just ping
-buf curl --schema proto --protocol grpc --http2-prior-knowledge \
+buf curl --schema crates/ipma-proto/proto --protocol grpc --http2-prior-knowledge \
   --data '{"locationId":1110600}' \
   http://127.0.0.1:50051/ipma.proxy.v1.ProxyService/GetWeatherForecast
 ```
 
-The [versioned schema](proto/ipma/proxy/v1/proxy.proto) defines the complete
-contract. Generated Rust clients are exposed through `ipma_proxy::proto`.
+The [versioned schema](crates/ipma-proto/proto/ipma/proxy/v1/proxy.proto) defines the complete
+contract. Generated Rust clients are exposed through `ipma_proto::v1`.
+Construct an `ipma_service::Proxy` to embed the service in another application.
 Existing `Ping` clients remain compatible.
 
 | RPC | Source / selection |
@@ -64,13 +89,13 @@ wrapped in protobuf. Decode it with `geobuf.decode(new Pbf(response.geobuf))`.
 The station array is wrapped as a FeatureCollection. Coordinates are rounded to
 six decimal places; properties, nested values, feature IDs and foreign members
 (including source metadata and missing-value sentinels) are preserved. CRS metadata
-is retained without reprojection. The [vendored wire contract and ISC notice](third_party/geobuf/README.md)
+is retained without reprojection. The [vendored wire contract and ISC notice](crates/geojson-geobuf/third_party/geobuf/README.md)
 describe format constraints. Malformed or unsupported upstream data fails with
 `DATA_LOSS` rather than silently changing its meaning.
 
 Run `just update-geobuf` to refresh the vendored schema and license from upstream,
 or `just update-geobuf <tag-or-commit>` to select a revision. The resolved commit
-is recorded in `third_party/geobuf/UPSTREAM_REVISION`; review changes against the
+is recorded in `crates/geojson-geobuf/third_party/geobuf/UPSTREAM_REVISION`; review changes against the
 encoder and run `just interop` afterward.
 
 The shared reqwest client pools HTTPS connections, verifies certificates,
@@ -114,7 +139,7 @@ Existing environment variables take precedence over `.env` values. Run
 | `IPMA_PROXY_MAX_CONCURRENT_FETCHES` | `8` |
 | `IPMA_PROXY_MAX_BODY_MIB` | `32` (maximum 32) |
 | `IPMA_PROXY_CACHE_TTL_CAP_SECONDS` | Unset; dataset defaults apply |
-| `RUST_LOG` | `ipma_proxy=info` |
+| `RUST_LOG` | `ipma_proxy=info,ipma_service=info` |
 
 The upstream base must be an HTTPS directory URL without credentials, query or
 fragment. Loopback HTTP is allowed for local tests. gRPC requests are limited to
@@ -137,7 +162,7 @@ for this interoperability check, not to build or run the proxy.
 `just smoke` calls all dataset selections against a running proxy and reports
 protobuf sizes plus timings for 100 warm-cache Lisbon RPCs. It contacts the
 configured upstream on cache misses, so keep it as an explicit integration check.
-The fixtures are small excerpts from IPMA responses retrieved on 2026-11-10,
+The service fixtures in `crates/ipma-service/tests/fixtures` are small excerpts from IPMA responses retrieved on 2026-11-10,
 with synthetic cases added for missing values and validation.
 
 IPMA's API page provides its current usage conditions, attribution requirements
