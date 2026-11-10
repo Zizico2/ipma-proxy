@@ -3,7 +3,10 @@ use ipma_proto::v1::*;
 use prost::Message;
 use serde_json::Value;
 
-use crate::proxy::{Error, Key};
+use crate::{
+    classification,
+    proxy::{Error, Key},
+};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -196,6 +199,10 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
             let mut forecasts = Vec::new();
             for v in array(&root["data"])? {
                 object(v)?;
+                let weather_type_code = integer(v, "idWeatherType")?;
+                let wind_speed_class = integer(v, "classWindSpeed")?;
+                let precipitation_intensity_class = integer(v, "classPrecInt")?;
+                let prevailing_wind_direction = text(v, "predWindDir")?;
                 forecasts.push(WeatherForecast {
                     location_id: if matches!(key, Key::WeatherLocation(_)) {
                         id(&root, "globalIdLocal")?
@@ -211,10 +218,16 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                     minimum_temperature_celsius: number(v, "tMin")?,
                     maximum_temperature_celsius: number(v, "tMax")?,
                     precipitation_probability_percent: number(v, "precipitaProb")?,
-                    prevailing_wind_direction: text(v, "predWindDir")?,
-                    weather_type_code: integer(v, "idWeatherType")?,
-                    wind_speed_class: integer(v, "classWindSpeed")?,
-                    precipitation_intensity_class: integer(v, "classPrecInt")?,
+                    weather_type: classification::weather_type(weather_type_code),
+                    wind_speed_classification: classification::wind_speed(wind_speed_class),
+                    precipitation_intensity: classification::precipitation(
+                        precipitation_intensity_class,
+                    ),
+                    wind_direction: classification::direction_text(&prevailing_wind_direction),
+                    prevailing_wind_direction,
+                    weather_type_code,
+                    wind_speed_class,
+                    precipitation_intensity_class,
                 });
             }
             Payload::Weather(GetWeatherForecastResponse {
@@ -227,10 +240,14 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                 .iter()
                 .map(|v| {
                     object(v)?;
+                    let type_name = string(&v["awarenessTypeName"])?;
+                    let level = string(&v["awarenessLevelID"])?;
                     Ok(Warning {
                         area_id: string(&v["idAreaAviso"])?,
-                        type_name: string(&v["awarenessTypeName"])?,
-                        level: string(&v["awarenessLevelID"])?,
+                        warning_type: classification::warning_type(&type_name),
+                        warning_level: classification::warning_level(&level),
+                        type_name,
+                        level,
                         text: text(v, "text")?,
                         starts_at: required_timestamp(&v["startTime"])?,
                         ends_at: required_timestamp(&v["endTime"])?,
@@ -256,13 +273,15 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                         .ok()
                         .filter(|id| *id > 0)
                         .ok_or_else(|| invalid("invalid station ID"))?;
+                    let wind_direction_code = integer(v, "idDireccVento")?;
                     observations.push(Observation {
                         station_id,
                         observed_at,
                         temperature_celsius: number(v, "temperatura")?,
                         wind_speed_meters_per_second: number(v, "intensidadeVento")?,
                         wind_speed_kilometers_per_hour: number(v, "intensidadeVentoKM")?,
-                        wind_direction_code: integer(v, "idDireccVento")?,
+                        wind_direction: classification::direction_code(wind_direction_code),
+                        wind_direction_code,
                         precipitation_millimeters: number(v, "precAcumulada")?,
                         relative_humidity_percent: number(v, "humidade")?,
                         sea_level_pressure_hectopascals: number(v, "pressao")?,
@@ -280,6 +299,7 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                 .iter()
                 .map(|v| {
                     object(v)?;
+                    let prevailing_wave_direction = text(v, "predWaveDir")?;
                     Ok(SeaForecast {
                         location_id: id(v, "globalIdLocal")?,
                         coordinates: coordinates(v, "latitude", "longitude")?,
@@ -291,7 +311,8 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                         maximum_significant_wave_height_meters: number(v, "totalSeaMax")?,
                         minimum_sea_surface_temperature_celsius: number(v, "sstMin")?,
                         maximum_sea_surface_temperature_celsius: number(v, "sstMax")?,
-                        prevailing_wave_direction: text(v, "predWaveDir")?,
+                        wave_direction: classification::direction_text(&prevailing_wave_direction),
+                        prevailing_wave_direction,
                     })
                 })
                 .collect::<Result<_>>()?;
@@ -307,10 +328,12 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                 .map(|(municipality_id, v)| {
                     object(v)?;
                     object(&v["data"])?;
+                    let risk_class = integer(&v["data"], "rcm")?;
                     Ok(FireRisk {
                         municipality_id: municipality_id.clone(),
                         coordinates: coordinates(v, "latitude", "longitude")?,
-                        risk_class: integer(&v["data"], "rcm")?,
+                        classification: classification::fire_risk(risk_class),
+                        risk_class,
                     })
                 })
                 .collect::<Result<_>>()?;
@@ -417,6 +440,9 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                     }
                     Ok(CodeEntry {
                         code: n as i32,
+                        classification: Some(classification::code_entry_classification(
+                            kind, n as i32,
+                        )),
                         description_portuguese: string(&v[pt])?,
                         description_english: string(&v[en])?,
                     })

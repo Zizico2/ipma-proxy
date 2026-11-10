@@ -162,6 +162,24 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
         .into_inner();
     assert_eq!(f.forecasts[0].location_id, 1110600);
     assert_eq!(f.forecasts[0].minimum_temperature_celsius, Some(16.5));
+    let first = &f.forecasts[0];
+    let weather = first.weather_type.as_ref().unwrap();
+    assert_eq!(weather.value(), WeatherType::RainWithPossibleThunderstorms);
+    assert_eq!(Some(weather.source_code), first.weather_type_code);
+    let wind = first.wind_speed_classification.as_ref().unwrap();
+    assert_eq!(wind.value(), WindSpeedClass::Moderate);
+    assert_eq!(Some(wind.source_code), first.wind_speed_class);
+    let rain = first.precipitation_intensity.as_ref().unwrap();
+    assert_eq!(rain.value(), PrecipitationIntensity::Strong);
+    assert_eq!(Some(rain.source_code), first.precipitation_intensity_class);
+    let direction = first.wind_direction.as_ref().unwrap();
+    assert_eq!(direction.value(), CompassDirection::SouthWest);
+    assert_eq!(
+        direction.source,
+        Some(direction_value::Source::Text(
+            first.prevailing_wind_direction.clone()
+        ))
+    );
     let meta = f.metadata.unwrap();
     assert!(meta.source_url.ends_with("1110600.json"));
     assert!(meta.expires_at.is_none());
@@ -184,6 +202,23 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
         .unwrap()
         .into_inner();
     assert_eq!(warnings.warnings[0].level, "orange");
+    let warning = &warnings.warnings[0];
+    assert_eq!(
+        warning.warning_level.as_ref().unwrap().value(),
+        WarningLevel::Orange
+    );
+    assert_eq!(
+        warning.warning_level.as_ref().unwrap().source_value,
+        warning.level
+    );
+    assert_eq!(
+        warning.warning_type.as_ref().unwrap().value(),
+        WarningType::Precipitation
+    );
+    assert_eq!(
+        warning.warning_type.as_ref().unwrap().source_value,
+        warning.type_name
+    );
     let observations = h
         .client
         .get_observations(GetObservationsRequest {})
@@ -194,6 +229,14 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
     assert_eq!(observations.len(), 2);
     assert_eq!(observations[0].temperature_celsius, Some(0.0));
     assert_eq!(observations[0].wind_direction_code, Some(0));
+    assert_eq!(
+        observations[0].wind_direction.as_ref().unwrap().value(),
+        CompassDirection::NoDirection
+    );
+    assert_eq!(
+        observations[0].wind_direction.as_ref().unwrap().source,
+        Some(direction_value::Source::Code(0))
+    );
     assert_eq!(observations[0].precipitation_millimeters, None);
     assert_eq!(observations[0].relative_humidity_percent, None);
     assert_eq!(observations[1].temperature_celsius, Some(-2.5));
@@ -219,6 +262,9 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
         .into_inner();
     assert_eq!(fire.risks[0].municipality_id, "0101");
     assert_eq!(fire.risks[0].risk_class, Some(1));
+    let risk = fire.risks[0].classification.as_ref().unwrap();
+    assert_eq!(risk.value(), FireRiskClass::Reduced);
+    assert_eq!(Some(risk.source_code), fire.risks[0].risk_class);
     assert!(
         !h.client
             .get_uv_forecast(GetUvForecastRequest {})
@@ -250,6 +296,10 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
                 .is_empty()
         );
     }
+    assert_eq!(
+        sea.forecasts[0].wave_direction.as_ref().unwrap().value(),
+        CompassDirection::West
+    );
     for kind in [1, 2, 3] {
         let codes = h
             .client
@@ -258,6 +308,34 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
             .unwrap()
             .into_inner();
         assert_eq!(codes.entries[0].code, -99);
+        for entry in &codes.entries {
+            match (&entry.classification, kind) {
+                (Some(code_entry::Classification::WeatherType(value)), 1) => {
+                    assert_ne!(*value, WeatherType::Other as i32);
+                    assert_eq!(*value == WeatherType::Unspecified as i32, entry.code == -99);
+                }
+                (Some(code_entry::Classification::WindSpeedClass(value)), 2) => {
+                    assert_ne!(*value, WindSpeedClass::Other as i32);
+                    assert_eq!(
+                        *value == WindSpeedClass::Unspecified as i32,
+                        entry.code == -99
+                    );
+                }
+                (Some(code_entry::Classification::PrecipitationIntensity(value)), 3) => {
+                    assert_ne!(*value, PrecipitationIntensity::Other as i32);
+                    assert_eq!(
+                        *value == PrecipitationIntensity::Unspecified as i32,
+                        entry.code == -99
+                    );
+                    if entry.code == 0 {
+                        assert_eq!(*value, PrecipitationIntensity::NoPrecipitation as i32);
+                    }
+                }
+                _ => panic!("reference row has wrong categorical kind"),
+            }
+            assert!(!entry.description_portuguese.is_empty());
+            assert!(!entry.description_english.is_empty());
+        }
     }
     for dataset in [1, 2, 3] {
         assert!(
@@ -626,4 +704,128 @@ async fn chunked_and_gzipped_bodies_cannot_bypass_the_decompressed_size_limit() 
         task.abort();
         assert_eq!(result.unwrap_err().code(), Code::ResourceExhausted);
     }
+}
+
+#[tokio::test]
+async fn unknown_and_missing_categories_are_lossless_over_grpc() {
+    let mut h = harness(StatusCode::OK, Some(r#"{"globalIdLocal":1110600,"forecastDate":"2026-11-10","data":[{"idWeatherType":777,"classWindSpeed":"999","classPrecInt":0,"predWindDir":"VARIABLE"},{"idWeatherType":null,"classWindSpeed":-99,"classPrecInt":null,"predWindDir":""},{"idWeatherType":0}]}"#), Duration::ZERO, 4096, Duration::from_secs(2)).await;
+    let forecasts = h
+        .client
+        .get_weather_forecast(GetWeatherForecastRequest {
+            target: Some(get_weather_forecast_request::Target::LocationId(1110600)),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .forecasts;
+    let future = &forecasts[0];
+    assert_eq!(future.weather_type_code, Some(777));
+    assert_eq!(
+        future.weather_type.as_ref().unwrap().value(),
+        WeatherType::Other
+    );
+    assert_eq!(future.weather_type.as_ref().unwrap().source_code, 777);
+    assert_eq!(future.wind_speed_class, Some(999));
+    assert_eq!(
+        future.wind_speed_classification.as_ref().unwrap().value(),
+        WindSpeedClass::Other
+    );
+    assert_eq!(
+        future
+            .wind_speed_classification
+            .as_ref()
+            .unwrap()
+            .source_code,
+        999
+    );
+    assert_eq!(future.precipitation_intensity_class, Some(0));
+    assert_eq!(
+        future.precipitation_intensity.as_ref().unwrap().value(),
+        PrecipitationIntensity::NoPrecipitation
+    );
+    assert_eq!(
+        future.wind_direction.as_ref().unwrap().value(),
+        CompassDirection::Other
+    );
+    assert_eq!(
+        future.wind_direction.as_ref().unwrap().source,
+        Some(direction_value::Source::Text("VARIABLE".into()))
+    );
+    assert!(forecasts[1].weather_type.is_none());
+    assert!(forecasts[1].wind_speed_classification.is_none());
+    assert!(forecasts[1].precipitation_intensity.is_none());
+    assert!(forecasts[1].wind_direction.is_none());
+    assert_eq!(
+        forecasts[2].weather_type.as_ref().unwrap().value(),
+        WeatherType::NoInformation
+    );
+
+    let mut h = harness(StatusCode::OK, Some(r#"[{"awarenessTypeName":"Novo fenómeno","awarenessLevelID":"purple","idAreaAviso":"FUT","text":"Future alert","startTime":"2026-11-10T12:00:00","endTime":"2026-11-10T13:00:00"}]"#), Duration::ZERO, 4096, Duration::from_secs(2)).await;
+    let warnings = h
+        .client
+        .get_warnings(GetWarningsRequest {})
+        .await
+        .unwrap()
+        .into_inner()
+        .warnings;
+    assert_eq!(
+        warnings[0].warning_type.as_ref().unwrap().value(),
+        WarningType::Other
+    );
+    assert_eq!(
+        warnings[0].warning_type.as_ref().unwrap().source_value,
+        "Novo fenómeno"
+    );
+    assert_eq!(
+        warnings[0].warning_level.as_ref().unwrap().value(),
+        WarningLevel::Other
+    );
+    assert_eq!(
+        warnings[0].warning_level.as_ref().unwrap().source_value,
+        "purple"
+    );
+    assert_eq!(warnings[0].area_id, "FUT");
+
+    let mut h = harness(StatusCode::OK, Some(r#"{"dataPrev":"2026-11-10","dataRun":"2026-11-09","local":{"0101":{"data":{"rcm":999}}}}"#), Duration::ZERO, 4096, Duration::from_secs(2)).await;
+    let risks = h
+        .client
+        .get_fire_risk(GetFireRiskRequest {
+            day_offset: Some(0),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .risks;
+    assert_eq!(risks[0].municipality_id, "0101");
+    assert_eq!(
+        risks[0].classification.as_ref().unwrap().value(),
+        FireRiskClass::Other
+    );
+    assert_eq!(risks[0].classification.as_ref().unwrap().source_code, 999);
+}
+
+#[tokio::test]
+async fn station_direction_aliases_keep_their_original_codes() {
+    let mut h = harness(StatusCode::OK, Some(r#"{"2026-11-10T12:00":{"1001":{"idDireccVento":1},"1002":{"idDireccVento":9},"1003":{"idDireccVento":99},"1004":{"idDireccVento":-99}}}"#), Duration::ZERO, 4096, Duration::from_secs(2)).await;
+    let observations = h
+        .client
+        .get_observations(GetObservationsRequest {})
+        .await
+        .unwrap()
+        .into_inner()
+        .observations;
+    for (index, code) in [(0, 1), (1, 9)] {
+        let direction = observations[index].wind_direction.as_ref().unwrap();
+        assert_eq!(direction.value(), CompassDirection::North);
+        assert_eq!(direction.source, Some(direction_value::Source::Code(code)));
+    }
+    assert_eq!(
+        observations[2].wind_direction.as_ref().unwrap().value(),
+        CompassDirection::Other
+    );
+    assert_eq!(
+        observations[2].wind_direction.as_ref().unwrap().source,
+        Some(direction_value::Source::Code(99))
+    );
+    assert!(observations[3].wind_direction.is_none());
 }

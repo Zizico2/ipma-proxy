@@ -14,8 +14,8 @@ The three repositories have separate responsibilities:
 | [ipma-proto](https://github.com/Zizico2/ipma-proto) | Language-neutral schemas, Rust code generation and shared bindings |
 
 Both services consume `ipma-proto` via the same full-SHA-pinned Cargo Git
-dependency. This repository builds independently of sibling folders; no
-local path override is used. The schema repository owns protox,
+dependency. Both repositories build independently of sibling folders, without
+local path overrides. The schema repository owns protox,
 tonic-prost-build, Buf checks and future language generators. Import generated
 Rust messages/clients from `ipma_proto::v1`.
 
@@ -77,6 +77,17 @@ Null/missing measurements, empty numeric strings and the -99 sentinel become
 absent optional fields; real zeroes and negative temperatures survive. Null
 station records are omitted, reference tables retain -99 codes, DICO strings
 retain leading zeroes, and UV rows with unmapped location ID 0 are preserved.
+
+The adapter maps warning levels/types, weather types, wind-speed classes,
+precipitation intensity, fire-risk classes and compass directions to shared
+enums. Typed wrappers use `value` with `source_code` or `source_value`;
+directions retain either source text or a numeric code. Existing raw fields
+remain available. Missing categories are absent; unfamiliar values map to
+`OTHER` with the original source retained. Reference-table entries compose a
+`classification` oneof with the original code and bilingual descriptions.
+Districts, municipalities, warning areas and location/station IDs remain
+identifiers. UV risk is not derived from measurements, and Geobuf properties
+are not remapped. See [category semantics](https://github.com/Zizico2/ipma-proto/blob/main/docs/categories.md).
 
 `GetGeoDatasetResponse.geobuf` is a raw Mapbox Geobuf Data message. Decode with
 `geobuf.decode(new Pbf(response.geobuf))`. The stations array is wrapped in a

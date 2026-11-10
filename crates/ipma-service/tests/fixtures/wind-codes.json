@@ -11,6 +11,21 @@
       "descClassWindSpeedDailyEN": "Weak",
       "descClassWindSpeedDailyPT": "Fraco",
       "classWindSpeed": "1"
+    },
+    {
+      "descClassWindSpeedDailyEN": "Moderate",
+      "descClassWindSpeedDailyPT": "Moderado",
+      "classWindSpeed": "2"
+    },
+    {
+      "descClassWindSpeedDailyEN": "Strong",
+      "descClassWindSpeedDailyPT": "Forte",
+      "classWindSpeed": "3"
+    },
+    {
+      "descClassWindSpeedDailyEN": "Very strong",
+      "descClassWindSpeedDailyPT": "Muito forte",
+      "classWindSpeed": "4"
     }
   ]
 }

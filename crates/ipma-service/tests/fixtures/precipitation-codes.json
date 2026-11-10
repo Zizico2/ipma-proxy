@@ -11,6 +11,21 @@
       "descClassPrecIntEN": "No precipitation",
       "descClassPrecIntPT": "Sem precipitação",
       "classPrecInt": "0"
+    },
+    {
+      "descClassPrecIntEN": "Weak",
+      "descClassPrecIntPT": "Fraco",
+      "classPrecInt": "1"
+    },
+    {
+      "descClassPrecIntEN": "Moderate",
+      "descClassPrecIntPT": "Moderado",
+      "classPrecInt": "2"
+    },
+    {
+      "descClassPrecIntEN": "Strong",
+      "descClassPrecIntPT": "Forte",
+      "classPrecInt": "3"
     }
   ]
 }
