@@ -164,10 +164,8 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
     assert_eq!(f.forecasts[0].minimum_temperature_celsius, Some(16.5));
     let meta = f.metadata.unwrap();
     assert!(meta.source_url.ends_with("1110600.json"));
-    assert_eq!(
-        meta.expires_at.unwrap().seconds - meta.fetched_at.unwrap().seconds,
-        600
-    );
+    assert!(meta.expires_at.is_none());
+    assert!(meta.fetched_at.is_some());
     assert!(meta.upstream_updated_at.is_some());
     let f = h
         .client
@@ -373,47 +371,41 @@ async fn validation_happens_before_any_upstream_fetch() {
 }
 
 #[tokio::test]
-async fn concurrent_cache_misses_coalesce_and_hits_preserve_fetch_time() {
-    let h = harness(
+async fn repeated_and_concurrent_calls_each_fetch_upstream() {
+    let mut h = configured_harness(
         StatusCode::OK,
         None,
-        Duration::from_millis(100),
-        4096,
-        Duration::from_secs(2),
+        Duration::from_millis(20),
+        ProxyOptions {
+            max_concurrent_fetches: 32,
+            ..Default::default()
+        },
     )
     .await;
+    for _ in 0..2 {
+        let response = h
+            .client
+            .get_warnings(GetWarningsRequest {})
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(response.metadata.unwrap().expires_at.is_none());
+    }
     let mut tasks = Vec::new();
     for _ in 0..20 {
         let mut client = h.client.clone();
         tasks.push(tokio::spawn(async move {
-            client
-                .get_weather_forecast(GetWeatherForecastRequest {
-                    target: Some(get_weather_forecast_request::Target::LocationId(1110600)),
-                })
-                .await
-                .unwrap()
-                .into_inner()
+            client.get_warnings(GetWarningsRequest {}).await.unwrap();
         }));
     }
-    let mut timestamps = Vec::new();
     for task in tasks {
-        timestamps.push(task.await.unwrap().metadata.unwrap().fetched_at);
+        task.await.unwrap();
     }
-    assert!(timestamps.iter().all(|t| t == &timestamps[0]));
-    let mut client = h.client.clone();
-    let cached = client
-        .get_weather_forecast(GetWeatherForecastRequest {
-            target: Some(get_weather_forecast_request::Target::LocationId(1110600)),
-        })
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(cached.metadata.unwrap().fetched_at, timestamps[0]);
-    assert_eq!(h.count.load(Ordering::SeqCst), 1);
+    assert_eq!(h.count.load(Ordering::SeqCst), 22);
 }
 
 #[tokio::test]
-async fn failed_responses_are_not_cached_and_errors_have_grpc_codes() {
+async fn upstream_errors_are_mapped_and_each_call_is_forwarded() {
     for (status, body, expected) in [
         (StatusCode::NOT_FOUND, None, Code::NotFound),
         (StatusCode::TOO_MANY_REQUESTS, None, Code::Unavailable),
@@ -485,7 +477,7 @@ async fn body_size_and_time_limits_are_enforced() {
 }
 
 #[tokio::test]
-async fn distinct_misses_over_capacity_fail_without_fetching() {
+async fn over_capacity_calls_fail_without_fetching() {
     let h = harness(
         StatusCode::OK,
         None,
@@ -537,57 +529,7 @@ fn upstream_configuration_rejects_credentials_redirect_prone_and_remote_http_url
 }
 
 #[tokio::test]
-async fn expired_entries_are_refetched_instead_of_serving_stale_data() {
-    let mut h = configured_harness(
-        StatusCode::OK,
-        None,
-        Duration::ZERO,
-        ProxyOptions {
-            cache_ttl_cap: Some(Duration::from_millis(50)),
-            ..Default::default()
-        },
-    )
-    .await;
-    let first = h
-        .client
-        .get_warnings(GetWarningsRequest {})
-        .await
-        .unwrap()
-        .into_inner();
-    tokio::time::sleep(Duration::from_millis(80)).await;
-    let second = h
-        .client
-        .get_warnings(GetWarningsRequest {})
-        .await
-        .unwrap()
-        .into_inner();
-    assert_ne!(
-        first.metadata.unwrap().fetched_at,
-        second.metadata.unwrap().fetched_at
-    );
-    assert_eq!(h.count.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn an_oversize_cache_entry_is_served_but_not_retained() {
-    let mut h = configured_harness(
-        StatusCode::OK,
-        None,
-        Duration::ZERO,
-        ProxyOptions {
-            cache_capacity_bytes: 1,
-            ..Default::default()
-        },
-    )
-    .await;
-    for _ in 0..2 {
-        h.client.get_warnings(GetWarningsRequest {}).await.unwrap();
-    }
-    assert_eq!(h.count.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn cancelled_fetch_does_not_leave_the_key_or_capacity_stuck() {
+async fn cancelled_fetch_releases_capacity() {
     let h = harness(
         StatusCode::OK,
         None,
@@ -607,12 +549,18 @@ async fn cancelled_fetch_does_not_leave_the_key_or_capacity_stuck() {
     .unwrap();
     task.abort();
     let mut client = h.client.clone();
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        client.get_warnings(GetWarningsRequest {}),
-    )
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            match client.get_warnings(GetWarningsRequest {}).await {
+                Ok(_) => break,
+                Err(status) if status.code() == Code::ResourceExhausted => {
+                    tokio::time::sleep(Duration::from_millis(5)).await
+                }
+                Err(status) => panic!("unexpected status: {status}"),
+            }
+        }
+    })
     .await
-    .unwrap()
     .unwrap();
     tokio::time::timeout(
         Duration::from_secs(1),

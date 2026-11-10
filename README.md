@@ -1,55 +1,50 @@
 # ipma-proxy
 
-A Rust gRPC proxy for [IPMA's documented public API](https://api.ipma.pt/).
-Forecasts, measurements, warnings, seismic events, reference data and climate
-CSV files become typed protobuf messages. GeoJSON becomes standalone
-[Mapbox Geobuf](https://github.com/mapbox/geobuf) bytes.
+Transparent gRPC adapter for [IPMA's documented public API](https://api.ipma.pt/).
+Every accepted data RPC makes one fresh upstream HTTP request, then converts
+JSON/CSV to typed protobuf or GeoJSON to standalone Mapbox Geobuf. Requests
+are not cached, coalesced or retried; redirects are refused.
 
-This repository is a Cargo workspace with four packages:
+The three repositories have separate responsibilities:
 
-| Crate | Responsibility | Workspace dependencies |
-| --- | --- | --- |
-| [`geojson-geobuf`](crates/geojson-geobuf) | Standalone GeoJSON validation and Mapbox Geobuf encoding | None |
-| [`ipma-proto`](crates/ipma-proto) | Versioned schemas, generated messages, clients/servers and descriptors | None |
-| [`ipma-service`](crates/ipma-service) | IPMA HTTP access, caching, data mappings and RPC implementation | `geojson-geobuf`, `ipma-proto` |
-| [`ipma-proxy`](crates/ipma-proxy) | CLI/env configuration, tracing, listeners, health, reflection and shutdown | `ipma-service`, `ipma-proto` |
+| Repository | Responsibility |
+| --- | --- |
+| [ipma-proxy](https://github.com/Zizico2/ipma-proxy) | IPMA HTTP adapter and data conversion |
+| [ipma-gateway](https://github.com/Zizico2/ipma-gateway) | Same gRPC API with caching and a home for future application policies |
+| [ipma-proto](https://github.com/Zizico2/ipma-proto) | Language-neutral schemas, Rust code generation and shared bindings |
 
-The converter can be built and used independently with only `serde_json` and
-`thiserror` as runtime dependencies. Clients can depend on `ipma-proto` without
-linking the upstream HTTP client or cache. Fetching, cache policy and IPMA data
-mapping stay together in the service crate because they share the dataset
-contract. Modules handle the smaller internal boundaries.
+Both services consume `ipma-proto` via the same full-SHA-pinned Cargo Git
+dependency. This repository builds independently of sibling folders; no
+local path override is used. The schema repository owns protox,
+tonic-prost-build, Buf checks and future language generators. Import generated
+Rust messages/clients from `ipma_proto::v1`.
 
-This split follows the reusable library/CLI boundary in
-[Geozero](https://github.com/georust/geozero/blob/main/Cargo.toml), the separate
-protocol-related crates in [Tonic](https://github.com/grpc/grpc-rust/blob/master/Cargo.toml),
-and [Axum's shared workspace metadata and lints](https://github.com/tokio-rs/axum/blob/main/Cargo.toml).
-The root manifest owns dependency versions, package metadata, release profiles,
-and lints, using Cargo resolver 3. All crates share one lockfile and target
-directory. The default member is the server, so `cargo run` starts the proxy;
-`just check`, `just lint`, `just test` and `just build` cover the entire workspace.
-
-Run `just run` (or `cargo run --locked`) to listen on `127.0.0.1:50051`.
-Rust is pinned in `rust-toolchain.toml`; protobuf generation uses protox and
-requires neither protoc nor Buf. `just release` builds with thin LTO and one
-codegen unit. The server supports graceful SIGINT/SIGTERM shutdown, standard
-gRPC health checks and v1 server reflection. Configure TLS/authentication at
-your ingress when serving beyond a trusted network.
-
-```sh
-cp .env.example .env
-just run
-# In another terminal:
-just ping
-buf curl --schema crates/ipma-proto/proto --protocol grpc --http2-prior-knowledge \
-  --data '{"locationId":1110600}' \
-  http://127.0.0.1:50051/ipma.proxy.v1.ProxyService/GetWeatherForecast
+```text
+client -> ipma-proxy :50051 -> IPMA HTTPS
+client -> ipma-gateway :50052 -> ipma-proxy :50051 -> IPMA HTTPS
 ```
 
-The [versioned schema](crates/ipma-proto/proto/ipma/proxy/v1/proxy.proto) defines the complete
-contract. Generated Rust clients are exposed through `ipma_proto::v1`.
-Construct an `ipma_service::Proxy` to embed the service in another application.
-Existing `Ping` clients remain compatible.
+This Cargo workspace contains three crates:
+
+| Crate | Responsibility |
+| --- | --- |
+| [`geojson-geobuf`](crates/geojson-geobuf) | Standalone converter with only serde_json/thiserror runtime dependencies |
+| [`ipma-service`](crates/ipma-service) | One-to-one HTTP fetching, data mappings and gRPC implementation |
+| [`ipma-proxy`](crates/ipma-proxy) | CLI/env configuration, tracing, health, reflection and shutdown |
+
+Connection pooling, TLS verification, request timeouts, decompressed body
+limits and bounded conversion work are transport safeguards. Caching,
+authentication, quotas and application rate limits belong in ipma-gateway.
+There is no Moka dependency or cache policy in the adapter.
+
+Run `just run` (or `cargo run --locked`) to listen on `127.0.0.1:50051`.
+`just ping` calls the running server using gRPC reflection. `just smoke`
+exercises all 26 supported data selections; repeated calls contact IPMA again.
+Its example client uses the external API crate. Rust is pinned in
+`rust-toolchain.toml`; protobuf bindings are generated by that Git dependency
+without requiring protoc or Buf. `just release` uses thin LTO and one codegen
+unit. SIGINT/SIGTERM trigger graceful shutdown. Configure TLS/authentication at
+your ingress when serving beyond a trusted network.
 
 | RPC | Source / selection |
 | --- | --- |
@@ -71,63 +66,38 @@ request enums return `INVALID_ARGUMENT`. The proxy uses fixed endpoint paths;
 clients cannot request arbitrary URLs. Website-only feeds are outside its scope.
 The auxiliary weather-icon ZIP remains available directly from IPMA's API page.
 
-Every dataset response carries source attribution, fetch time, expiry time and
-an upstream update timestamp when supplied. Fetch time describes the proxy's
-retrieval, not the age of the observation. Warning/event times use
-`google.protobuf.Timestamp` in UTC; forecast dates use a civil `Date` message.
+Every dataset carries source attribution, fetch time and an upstream update
+timestamp when supplied. The adapter leaves `expires_at` unset; ipma-gateway
+owns cache expiry. Fetch time describes retrieval, not observation age.
+Warning/event times use google.protobuf.Timestamp in UTC; forecast dates are
+civil dates. Existing RPC wire paths and data field numbers are unchanged.
 
-Numeric strings and JSON numbers map to finite numeric fields with documented
-units. Missing/null measurements, empty numeric strings and the `-99` sentinel
-become absent optional fields; real zeroes and negative temperatures survive.
-Null station records are omitted. Reference tables retain the `-99` code.
-Municipality DICO identifiers retain leading zeroes as strings. UV rows with
-IPMA's unmapped location ID `0` are retained. Unknown upstream warning categories
-remain strings so new categories do not break decoding.
+Numeric strings and JSON numbers map to finite values with documented units.
+Null/missing measurements, empty numeric strings and the -99 sentinel become
+absent optional fields; real zeroes and negative temperatures survive. Null
+station records are omitted, reference tables retain -99 codes, DICO strings
+retain leading zeroes, and UV rows with unmapped location ID 0 are preserved.
 
-`GetGeoDatasetResponse.geobuf` contains a raw Geobuf `Data` message, not JSON
-wrapped in protobuf. Decode it with `geobuf.decode(new Pbf(response.geobuf))`.
-The station array is wrapped as a FeatureCollection. Coordinates are rounded to
-six decimal places; properties, nested values, feature IDs and foreign members
-(including source metadata and missing-value sentinels) are preserved. CRS metadata
-is retained without reprojection. The [vendored wire contract and ISC notice](crates/geojson-geobuf/third_party/geobuf/README.md)
-describe format constraints. Malformed or unsupported upstream data fails with
-`DATA_LOSS` rather than silently changing its meaning.
+`GetGeoDatasetResponse.geobuf` is a raw Mapbox Geobuf Data message. Decode with
+`geobuf.decode(new Pbf(response.geobuf))`. The stations array is wrapped in a
+FeatureCollection. Coordinates use six decimal places; properties, nested
+values, IDs, source metadata, sentinels and CRS metadata survive without
+reprojection. See the [converter](crates/geojson-geobuf/README.md) and
+[vendored wire contract](crates/geojson-geobuf/third_party/geobuf/README.md).
+`just update-geobuf [tag-or-commit]` refreshes the schema/license and records
+the source revision; `just interop` checks against Mapbox's pinned JS decoder.
 
-Run `just update-geobuf` to refresh the vendored schema and license from upstream,
-or `just update-geobuf <tag-or-commit>` to select a revision. The resolved commit
-is recorded in `crates/geojson-geobuf/third_party/geobuf/UPSTREAM_REVISION`; review changes against the
-encoder and run `just interop` afterward.
+The reqwest client shares HTTPS connections, validates certificates and
+negotiates gzip. Response limits apply while reading decompressed chunks,
+including chunked bodies without Content-Length. JSON/CSV conversion and
+Geobuf encoding run on blocking workers with permits held until completion,
+even if the originating RPC is cancelled. Exceeding fetch/conversion capacity
+returns RESOURCE_EXHAUSTED. IPMA timeouts return DEADLINE_EXCEEDED, 404 returns
+NOT_FOUND, rate limits/server failures return UNAVAILABLE, and malformed or
+unsupported data returns DATA_LOSS.
 
-The shared reqwest client pools HTTPS connections, verifies certificates,
-negotiates gzip and refuses redirects. Downloads enforce a size limit while
-reading decompressed chunks, including responses without Content-Length.
-A semaphore bounds combined HTTP/conversion work, with immediate
-`RESOURCE_EXHAUSTED` responses when distinct misses exceed capacity. JSON/CSV
-conversion and Geobuf encoding run on blocking workers; cancelling an RPC does
-not release a conversion's permit before that worker finishes.
-
-Moka coalesces concurrent misses for the same dataset. Converted responses are
-cached, avoiding repeat HTTP calls, JSON/CSV parsing and Geobuf encoding.
-Cache weights include a conservative heap-overhead allowance (four times encoded
-size plus 1 KiB); the configured budget is approximate, not a process RSS limit.
-Entries larger than that budget are served without admission. Errors are never
-cached. Eviction and restart may cause earlier refreshes.
-
-| Dataset | Maximum cache lifetime |
-| --- | --- |
-| Warnings | 60 seconds |
-| Location/code tables and station catalogue | 24 hours |
-| Climate statistics | 1 hour |
-| Other datasets | 10 minutes |
-
-Day-relative forecasts also expire by the next midnight UTC. Lifetimes can be
-shortened globally with `--cache-ttl-cap-seconds`; expiry metadata reflects the
-actual policy. Requests after expiry fetch fresh data; stale data is not served
-on upstream failure. Timeouts return `DEADLINE_EXCEEDED`, upstream 404 returns
-`NOT_FOUND`, and upstream rate limiting/server failures return `UNAVAILABLE`.
-
-Configuration comes from CLI arguments, then environment, then optional `.env`.
-Existing environment variables take precedence over `.env` values. Run
+Configuration: CLI arguments override environment, which overrides optional
+.env. Existing environment values take precedence over .env. Run
 `just run --help` for options.
 
 | Environment variable | Default |
@@ -135,36 +105,26 @@ Existing environment variables take precedence over `.env` values. Run
 | `IPMA_PROXY_LISTEN_ADDR` | `127.0.0.1:50051` |
 | `IPMA_PROXY_UPSTREAM_BASE_URL` | `https://api.ipma.pt/open-data/` |
 | `IPMA_PROXY_UPSTREAM_TIMEOUT_SECONDS` | `15` |
-| `IPMA_PROXY_CACHE_MIB` | `64` |
 | `IPMA_PROXY_MAX_CONCURRENT_FETCHES` | `8` |
-| `IPMA_PROXY_MAX_BODY_MIB` | `32` (maximum 32) |
-| `IPMA_PROXY_CACHE_TTL_CAP_SECONDS` | Unset; dataset defaults apply |
+| `IPMA_PROXY_MAX_BODY_MIB` | `32` |
 | `RUST_LOG` | `ipma_proxy=info,ipma_service=info` |
 
-The upstream base must be an HTTPS directory URL without credentials, query or
-fragment. Loopback HTTP is allowed for local tests. gRPC requests are limited to
-64 KiB, responses to 32 MiB and concurrent requests per connection to 64. The
-server applies a request timeout of upstream timeout plus 15 seconds. gRPC gzip
-is available when negotiated by clients.
+The upstream base must be an HTTPS directory URL without credentials, query
+or fragment. Loopback HTTP supports local testing. gRPC requests are limited
+to 64 KiB, responses to 32 MiB and concurrent requests per connection to 64.
+The server timeout is upstream timeout plus 15 seconds; caller deadlines can
+shorten it. gRPC gzip is negotiated by clients.
 
-`just verify` runs formatting, Clippy with warnings denied, all Rust tests, Buf
-lint/build and a protobuf compatibility check against committed HEAD. The tests
-use local HTTP and real gRPC servers: every dataset mapping, missing-value
-semantics, validation, coalescing, cache expiry/admission, cancellation,
-upstream failures, timeouts and size limits are checked without IPMA access.
+`just verify` runs workspace formatting, Clippy with warnings denied,
+integration tests and doctests. Tests prove that repeated/concurrent accepted
+calls each fetch upstream, as well as dataset mapping, validation, error
+mapping, cancellation, capacity, timeouts and chunked/gzip size limits.
+The service fixtures are IPMA excerpts from 2026-11-10 with synthetic cases
+for missing values. Node/npm and Buf are only needed for the optional
+Geobuf interoperability/update tools. Schema lint/breaking checks live in
+ipma-proto. When adopting an API update, change the Git rev in Cargo.toml
+and refresh Cargo.lock in both service repositories.
 
-`just interop` builds the encoder example, installs pinned test-only npm packages
-with scripts disabled, and checks its output with Mapbox's official decoder.
-It exercises every geometry type, holes, 3D coordinates, null geometries,
-feature IDs, properties and invalid geometry rejection. Node/npm are only needed
-for this interoperability check, not to build or run the proxy.
-
-`just smoke` calls all dataset selections against a running proxy and reports
-protobuf sizes plus timings for 100 warm-cache Lisbon RPCs. It contacts the
-configured upstream on cache misses, so keep it as an explicit integration check.
-The service fixtures in `crates/ipma-service/tests/fixtures` are small excerpts from IPMA responses retrieved on 2026-11-10,
-with synthetic cases added for missing values and validation.
-
-IPMA's API page provides its current usage conditions, attribution requirements
-and request to notify `webmaster@ipma.pt` about intended use. Consult those terms
-for your application. The proxy does not contact that address automatically.
+IPMA's API page contains its current usage conditions and attribution
+requirements and requests that users notify webmaster@ipma.pt of intended
+use. The adapter preserves IPMA attribution and never contacts that address.

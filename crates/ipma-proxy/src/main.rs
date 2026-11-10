@@ -10,7 +10,10 @@ use tonic::{codec::CompressionEncoding, transport::Server};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(version, about = "Cached gRPC proxy for IPMA's documented public API")]
+#[command(
+    version,
+    about = "Transparent gRPC proxy for IPMA's documented public API"
+)]
 struct Config {
     /// Address on which the gRPC server listens.
     #[arg(
@@ -29,18 +32,12 @@ struct Config {
     /// Total timeout for each upstream HTTP request, in seconds.
     #[arg(long, env = "IPMA_PROXY_UPSTREAM_TIMEOUT_SECONDS", default_value = "15", value_parser = clap::value_parser!(u64).range(1..=300))]
     upstream_timeout_seconds: u64,
-    /// Approximate cache budget in MiB, including a heap-overhead allowance.
-    #[arg(long, env = "IPMA_PROXY_CACHE_MIB", default_value = "64", value_parser = clap::value_parser!(u64).range(1..=65536))]
-    cache_mib: u64,
     /// Maximum simultaneous HTTP fetches and CPU conversions.
     #[arg(long, env = "IPMA_PROXY_MAX_CONCURRENT_FETCHES", default_value = "8", value_parser = clap::value_parser!(u32).range(1..=256))]
     max_concurrent_fetches: u32,
     /// Maximum decompressed HTTP body size in MiB (1..32).
     #[arg(long, env = "IPMA_PROXY_MAX_BODY_MIB", default_value = "32", value_parser = clap::value_parser!(u32).range(1..=32))]
     max_body_mib: u32,
-    /// Optional upper bound on all dataset cache lifetimes, in seconds.
-    #[arg(long, env = "IPMA_PROXY_CACHE_TTL_CAP_SECONDS", value_parser = clap::value_parser!(u64).range(1..=86400))]
-    cache_ttl_cap_seconds: Option<u64>,
     /// Tracing filter directives.
     #[arg(
         long,
@@ -90,10 +87,8 @@ async fn main() -> anyhow::Result<()> {
     let proxy = Proxy::new(ProxyOptions {
         upstream_base_url: config.upstream_base_url,
         upstream_timeout: Duration::from_secs(config.upstream_timeout_seconds),
-        cache_capacity_bytes: config.cache_mib * 1024 * 1024,
         max_concurrent_fetches: config.max_concurrent_fetches as usize,
         max_body_bytes: config.max_body_mib as usize * 1024 * 1024,
-        cache_ttl_cap: config.cache_ttl_cap_seconds.map(Duration::from_secs),
     })?;
     let service = ProxyServiceServer::new(proxy)
         .max_decoding_message_size(64 * 1024)

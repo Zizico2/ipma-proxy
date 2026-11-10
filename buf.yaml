@@ -1,9 +1,0 @@
-version: v2
-modules:
-  - path: crates/ipma-proto/proto
-lint:
-  use:
-    - STANDARD
-breaking:
-  use:
-    - FILE

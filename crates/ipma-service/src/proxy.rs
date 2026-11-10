@@ -8,7 +8,6 @@ use ipma_proto::{
     MAX_MESSAGE_BYTES,
     v1::{self as pb, proxy_service_server::ProxyService},
 };
-use moka::{Expiry, future::Cache};
 use reqwest::{Client, Url};
 use tokio::sync::Semaphore;
 use tonic::{Request, Response, Status};
@@ -20,10 +19,7 @@ pub struct ProxyOptions {
     pub upstream_base_url: Url,
     pub upstream_timeout: Duration,
     pub max_body_bytes: usize,
-    pub cache_capacity_bytes: u64,
     pub max_concurrent_fetches: usize,
-    /// Optional upper bound on dataset-specific cache lifetimes.
-    pub cache_ttl_cap: Option<Duration>,
 }
 
 impl Default for ProxyOptions {
@@ -32,9 +28,7 @@ impl Default for ProxyOptions {
             upstream_base_url: Url::parse("https://api.ipma.pt/open-data/").expect("static URL"),
             upstream_timeout: Duration::from_secs(15),
             max_body_bytes: MAX_MESSAGE_BYTES,
-            cache_capacity_bytes: 64 * 1024 * 1024,
             max_concurrent_fetches: 8,
-            cache_ttl_cap: None,
         }
     }
 }
@@ -111,38 +105,13 @@ impl Key {
             Self::Climate(_) => "observation/climate/temperature/t2m-p1d-continental-obssup-idw-concelhos-20d.csv".into(),
         }
     }
-
-    pub(crate) fn ttl(self) -> Duration {
-        Duration::from_secs(match self {
-            Self::Warnings => 60,
-            Self::Locations(_) | Self::Codes(_) | Self::Geo(2) => 86400,
-            Self::Climate(_) => 3600,
-            _ => 600,
-        })
-    }
 }
 
-struct CacheExpiry;
-
-#[derive(Debug)]
-enum LoadError {
-    Failed(Error),
-    // Share the initializer's result with waiters without admitting a jumbo entry.
-    Uncacheable(Arc<Payload>),
-}
-impl Expiry<Key, Arc<Payload>> for CacheExpiry {
-    fn expire_after_create(&self, _: &Key, value: &Arc<Payload>, _: Instant) -> Option<Duration> {
-        // Use the advertised absolute expiry; conversion time never extends TTL.
-        Some(value.remaining_ttl())
-    }
-}
-
-/// Clones share the HTTP connection pool, bounded cache and fetch permits.
+/// Clones share the HTTP connection pool and fetch permits. Each data RPC fetches IPMA.
 #[derive(Clone)]
 pub struct Proxy {
     client: Client,
     options: ProxyOptions,
-    cache: Cache<Key, Arc<Payload>>,
     permits: Arc<Semaphore>,
 }
 
@@ -167,19 +136,13 @@ impl Proxy {
             "body limit must be in 1..={MAX_MESSAGE_BYTES}"
         );
         anyhow::ensure!(
-            options.max_concurrent_fetches > 0
-                && options.cache_capacity_bytes > 0
-                && !options.upstream_timeout.is_zero(),
+            options.max_concurrent_fetches > 0 && !options.upstream_timeout.is_zero(),
             "resource limits and timeout must be positive"
         );
         anyhow::ensure!(
             options.max_concurrent_fetches <= 256
                 && options.upstream_timeout <= Duration::from_secs(300),
             "fetch concurrency must not exceed 256 and timeout must not exceed 300 seconds"
-        );
-        anyhow::ensure!(
-            !options.cache_ttl_cap.is_some_and(|ttl| ttl.is_zero()),
-            "cache TTL cap must be positive"
         );
         let client = Client::builder()
             .user_agent(concat!(
@@ -190,48 +153,24 @@ impl Proxy {
             .connect_timeout(options.upstream_timeout.min(Duration::from_secs(5)))
             .timeout(options.upstream_timeout)
             .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
             .pool_max_idle_per_host(options.max_concurrent_fetches)
             .tcp_nodelay(true)
             .gzip(true)
             .build()?;
-        // Encoded size is an approximation; account conservatively for heap structures.
-        let cache = Cache::builder()
-            .max_capacity(options.cache_capacity_bytes)
-            .weigher(|_: &Key, value: &Arc<Payload>| value.weight())
-            .expire_after(CacheExpiry)
-            .build();
         let permits = Arc::new(Semaphore::new(options.max_concurrent_fetches));
         Ok(Self {
             client,
             options,
-            cache,
             permits,
         })
     }
 
-    async fn get(&self, key: Key) -> Result<Arc<Payload>, Status> {
-        // Moka runs one initializer per key; concurrent misses share its result.
-        match self
-            .cache
-            .try_get_with(key, async {
-                let payload = Arc::new(self.fetch(key).await.map_err(LoadError::Failed)?);
-                if u64::from(payload.weight()) > self.options.cache_capacity_bytes {
-                    Err(LoadError::Uncacheable(payload))
-                } else {
-                    Ok(payload)
-                }
-            })
-            .await
-        {
-            Ok(payload) => Ok(payload),
-            Err(error) => match error.as_ref() {
-                LoadError::Uncacheable(payload) => Ok(payload.clone()),
-                LoadError::Failed(error) => {
-                    tracing::warn!(path = %key.path(), %error, "dataset request failed");
-                    Err(error.status())
-                }
-            },
-        }
+    async fn get(&self, key: Key) -> Result<Payload, Status> {
+        self.fetch(key).await.map_err(|error| {
+            tracing::warn!(path = %key.path(), %error, "dataset request failed");
+            error.status()
+        })
     }
 
     async fn fetch(&self, key: Key) -> Result<Payload, Error> {
@@ -264,23 +203,10 @@ impl Proxy {
             body.extend_from_slice(&chunk);
         }
         let fetched = SystemTime::now();
-        let mut ttl = key.ttl();
-        if let Some(cap) = self.options.cache_ttl_cap {
-            ttl = ttl.min(cap);
-        }
-        if matches!(key, Key::WeatherDay(_) | Key::Sea(_) | Key::Fire(_)) {
-            // A cached 'today' must not become yesterday after midnight UTC.
-            let since_epoch = fetched
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map_err(|e| Error::Invalid(e.to_string()))?;
-            let until_midnight = Duration::from_secs(86400)
-                - Duration::new(since_epoch.as_secs() % 86400, since_epoch.subsec_nanos());
-            ttl = ttl.min(until_midnight);
-        }
         let metadata = pb::SourceMetadata {
             source_url: url.into(),
             fetched_at: Some(fetched.into()),
-            expires_at: Some((fetched + ttl).into()),
+            expires_at: None,
             upstream_updated_at: None,
             attribution: "IPMA, I.P. — https://www.ipma.pt".into(),
         };
@@ -295,7 +221,7 @@ impl Proxy {
             Ok(payload)
         })
         .await??;
-        tracing::info!(path = %key.path(), elapsed_ms = started.elapsed().as_millis(), response_bytes = payload.encoded_len(), "dataset refreshed");
+        tracing::info!(path = %key.path(), elapsed_ms = started.elapsed().as_millis(), response_bytes = payload.encoded_len(), "dataset fetched");
         Ok(payload)
     }
 }
@@ -325,12 +251,12 @@ fn choice(value: i32, max: i32, field: &str) -> Result<i32, Status> {
     }
 }
 
-// Keep cached payload types and RPC responses checked together at compile time.
+// Keep converted payload types and RPC responses checked together at compile time.
 macro_rules! respond {
     ($self:ident, $key:expr, $variant:ident) => {
-        match $self.get($key).await?.as_ref() {
-            Payload::$variant(value) => Ok(Response::new(value.clone())),
-            _ => Err(Status::internal("cache payload type mismatch")),
+        match $self.get($key).await? {
+            Payload::$variant(value) => Ok(Response::new(value)),
+            _ => Err(Status::internal("converted payload type mismatch")),
         }
     };
 }

@@ -1,4 +1,4 @@
-//! Run against a proxy: cargo run -p ipma-proto --example smoke -- http://127.0.0.1:50051
+//! Run against a proxy: cargo run -p ipma-proxy --example smoke -- http://127.0.0.1:50051
 use ipma_proto::{
     MAX_MESSAGE_BYTES,
     v1::{proxy_service_client::ProxyServiceClient, *},
@@ -101,9 +101,15 @@ async fn main() -> anyhow::Result<()> {
             client.get_climate(GetClimateRequest { dataset }).await,
         )?;
     }
-    // This measures local transport + cache + protobuf processing, not upstream latency.
+    // Extra calls are opt-in: a transparent adapter contacts IPMA every time.
+    let calls: u32 = std::env::args()
+        .nth(2)
+        .map(|n| n.parse())
+        .transpose()?
+        .unwrap_or(0);
+    anyhow::ensure!(calls <= 10_000, "extra call count must be at most 10000");
     let start = Instant::now();
-    for _ in 0..100 {
+    for _ in 0..calls {
         client
             .get_weather_forecast(GetWeatherForecastRequest {
                 target: Some(get_weather_forecast_request::Target::LocationId(1110600)),
@@ -111,9 +117,8 @@ async fn main() -> anyhow::Result<()> {
             .await?;
     }
     println!(
-        "100 sequential warm Lisbon RPCs: {:?} total, {:?} mean",
-        start.elapsed(),
-        start.elapsed() / 100
+        "{calls} extra sequential Lisbon RPCs: {:?} total",
+        start.elapsed()
     );
     Ok(())
 }

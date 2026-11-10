@@ -25,28 +25,17 @@ test:
     cargo test --locked --workspace --all-targets
     cargo test --locked --workspace --doc
 
-# Format Rust and protobuf sources.
+# Format Rust sources.
 fmt:
     cargo fmt --all
-    buf format -w
 
-# Check Rust and protobuf formatting.
+# Check Rust formatting.
 fmt-check:
     cargo fmt --all --check
-    buf format --diff --exit-code
 
 # Run Clippy with warnings treated as errors.
 lint:
     cargo clippy --locked --workspace --all-targets -- -D warnings
-
-# Lint and compile protobuf schemas.
-proto-check:
-    buf lint
-    buf build -o /dev/null
-
-# Check schema compatibility against a Git baseline.
-proto-breaking against='.git#branch=main':
-    buf breaking --against "$1"
 
 # Refresh the vendored Geobuf schema/license from a branch, tag or commit.
 update-geobuf ref='master':
@@ -66,13 +55,13 @@ update-geobuf ref='master':
     mv -- "$geobuf_tmp/geobuf.proto" "$geobuf_tmp/LICENSE" "$geobuf_tmp/UPSTREAM_REVISION" "$geobuf_dir/"
     printf 'Updated Geobuf to %s\n' "$geobuf_revision"
 
-# Call the example Ping RPC on a running server.
+# Call Ping on a running server using reflection.
 ping address='127.0.0.1:50051':
-    buf curl --schema crates/ipma-proto/proto --protocol grpc --http2-prior-knowledge --data '{}' "http://$1/ipma.proxy.v1.ProxyService/Ping"
+    buf curl --protocol grpc --http2-prior-knowledge --data '{}' "http://$1/ipma.proxy.v1.ProxyService/Ping"
 
 # Check all supported selections against a running proxy (contacts upstream).
 smoke address='http://127.0.0.1:50051':
-    cargo run --locked -p ipma-proto --example smoke -- "$1"
+    cargo run --locked -p ipma-proxy --example smoke -- "$1"
 
 # Verify Geobuf output with Mapbox's pinned JavaScript decoder.
 interop:
@@ -81,8 +70,7 @@ interop:
     npm --prefix crates/geojson-geobuf/tests/interop test
 
 # Run the local validation suite.
-verify: fmt-check check lint test proto-check
-    buf breaking --against '.git#ref=HEAD'
+verify: fmt-check check lint test
 
 # Remove Cargo build artifacts.
 clean:

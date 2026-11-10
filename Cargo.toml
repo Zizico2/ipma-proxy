@@ -10,7 +10,7 @@ rust-version = "1.99"
 
 [workspace.dependencies]
 geojson-geobuf = { path = "crates/geojson-geobuf", version = "0.1.0" }
-ipma-proto = { path = "crates/ipma-proto", version = "0.1.0" }
+ipma-proto = { git = "https://github.com/Zizico2/ipma-proto.git", rev = "2be562e77f1859baee5e412cb0122772ecf957a8" }
 ipma-service = { path = "crates/ipma-service", version = "0.1.0" }
 
 anyhow = "1.0.104"
@@ -21,10 +21,8 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 csv = "1.4.0"
 dotenvy = "0.15.7"
 flate2 = "1"
-moka = { version = "0.12.16", features = ["future"] }
 prost = "0.14.4"
 prost-types = "0.14.4"
-protox = "0.10.0"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "gzip", "http2"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
@@ -32,8 +30,6 @@ tokio = "1.54.1"
 tokio-stream = { version = "0.1", features = ["net"] }
 tonic = "0.14.9"
 tonic-health = "0.14.9"
-tonic-prost = "0.14.9"
-tonic-prost-build = "0.14.9"
 tonic-reflection = "0.14.9"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

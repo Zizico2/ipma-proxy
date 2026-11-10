@@ -22,28 +22,6 @@ pub(crate) enum Payload {
     Climate(GetClimateResponse),
 }
 impl Payload {
-    fn metadata(&self) -> Option<&SourceMetadata> {
-        match self {
-            Self::Weather(v) => v.metadata.as_ref(),
-            Self::Warnings(v) => v.metadata.as_ref(),
-            Self::Observations(v) => v.metadata.as_ref(),
-            Self::Sea(v) => v.metadata.as_ref(),
-            Self::Fire(v) => v.metadata.as_ref(),
-            Self::Uv(v) => v.metadata.as_ref(),
-            Self::Seismic(v) => v.metadata.as_ref(),
-            Self::Locations(v) => v.metadata.as_ref(),
-            Self::Codes(v) => v.metadata.as_ref(),
-            Self::Geo(v) => v.metadata.as_ref(),
-            Self::Climate(v) => v.metadata.as_ref(),
-        }
-    }
-    pub(crate) fn remaining_ttl(&self) -> std::time::Duration {
-        self.metadata()
-            .and_then(|m| m.expires_at)
-            .and_then(|t| std::time::SystemTime::try_from(t).ok())
-            .and_then(|t| t.duration_since(std::time::SystemTime::now()).ok())
-            .unwrap_or_default()
-    }
     pub(crate) fn encoded_len(&self) -> usize {
         match self {
             Self::Weather(v) => v.encoded_len(),
@@ -58,12 +36,6 @@ impl Payload {
             Self::Geo(v) => v.encoded_len(),
             Self::Climate(v) => v.encoded_len(),
         }
-    }
-    pub(crate) fn weight(&self) -> u32 {
-        self.encoded_len()
-            .saturating_mul(4)
-            .saturating_add(1024)
-            .min(u32::MAX as usize) as u32
     }
 }
 
