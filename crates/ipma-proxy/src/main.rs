@@ -2,10 +2,8 @@ use std::{io::ErrorKind, net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use clap::Parser;
-use ipma_proxy::{
-    proto::{FILE_DESCRIPTOR_SET, proxy_service_server::ProxyServiceServer},
-    proxy::{MAX_MESSAGE_BYTES, Proxy, ProxyOptions},
-};
+use ipma_proto::{FILE_DESCRIPTOR_SET, MAX_MESSAGE_BYTES, v1::proxy_service_server::ProxyServiceServer};
+use ipma_service::{Proxy, ProxyOptions};
 use tonic::{codec::CompressionEncoding, transport::Server};
 use tracing_subscriber::EnvFilter;
 
@@ -42,7 +40,7 @@ struct Config {
     #[arg(long, env = "IPMA_PROXY_CACHE_TTL_CAP_SECONDS", value_parser = clap::value_parser!(u64).range(1..=86400))]
     cache_ttl_cap_seconds: Option<u64>,
     /// Tracing filter directives.
-    #[arg(long, env = "RUST_LOG", default_value = "ipma_proxy=info")]
+    #[arg(long, env = "RUST_LOG", default_value = "ipma_proxy=info,ipma_service=info")]
     log_filter: EnvFilter,
 }
 

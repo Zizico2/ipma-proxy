@@ -602,6 +602,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "geojson-geobuf"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -902,33 +910,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipma-proto"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "prost",
+ "prost-types",
+ "protox",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
 name = "ipma-proxy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dotenvy",
+ "ipma-proto",
+ "ipma-service",
+ "reqwest",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ipma-service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
  "bytes",
  "chrono",
- "clap",
  "csv",
- "dotenvy",
  "flate2",
+ "geojson-geobuf",
+ "ipma-proto",
  "moka",
  "prost",
  "prost-types",
- "protox",
  "reqwest",
  "serde_json",
  "thiserror",
  "tokio",
  "tokio-stream",
  "tonic",
- "tonic-health",
- "tonic-prost",
- "tonic-prost-build",
- "tonic-reflection",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

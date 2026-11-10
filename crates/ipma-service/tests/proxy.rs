@@ -5,12 +5,10 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use ipma_proxy::{
-    proto::{
-        proxy_service_client::ProxyServiceClient, proxy_service_server::ProxyServiceServer, *,
-    },
-    proxy::{Proxy, ProxyOptions},
+use ipma_proto::v1::{
+    proxy_service_client::ProxyServiceClient, proxy_service_server::ProxyServiceServer, *,
 };
+use ipma_service::{Proxy, ProxyOptions};
 use std::{
     sync::{
         Arc,
@@ -628,7 +626,7 @@ async fn cancelled_fetch_does_not_leave_the_key_or_capacity_stuck() {
 #[tokio::test]
 async fn chunked_and_gzipped_bodies_cannot_bypass_the_decompressed_size_limit() {
     use axum::{body::Body, http::Response};
-    use ipma_proxy::proto::proxy_service_server::ProxyService;
+    use ipma_proto::v1::proxy_service_server::ProxyService;
     use std::io::Write;
     for compressed in [false, true] {
         let input = vec![b' '; 10_000];

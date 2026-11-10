@@ -1,7 +1,7 @@
-//! Run against a live proxy: cargo run --example smoke -- http://127.0.0.1:50051
-use ipma_proxy::{
-    proto::{proxy_service_client::ProxyServiceClient, *},
-    proxy::MAX_MESSAGE_BYTES,
+//! Run against a proxy: cargo run -p ipma-proto --example smoke -- http://127.0.0.1:50051
+use ipma_proto::{
+    v1::{proxy_service_client::ProxyServiceClient, *},
+    MAX_MESSAGE_BYTES,
 };
 use prost::Message;
 use std::time::Instant;

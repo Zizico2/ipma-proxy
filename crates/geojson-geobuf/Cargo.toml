@@ -1,0 +1,15 @@
+[package]
+name = "geojson-geobuf"
+description = "Encode GeoJSON as Mapbox-compatible Geobuf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file = "third_party/geobuf/LICENSE"
+readme = "README.md"
+
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

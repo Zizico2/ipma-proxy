@@ -1,0 +1,24 @@
+[package]
+name = "ipma-proxy"
+description = "gRPC server for IPMA's documented public API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+ipma-proto.workspace = true
+ipma-service.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+dotenvy.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tonic = { workspace = true, features = ["gzip"] }
+tonic-health.workspace = true
+tonic-reflection.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

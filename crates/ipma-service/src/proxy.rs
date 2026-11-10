@@ -4,18 +4,13 @@ use std::{
 };
 
 use bytes::BytesMut;
+use ipma_proto::{MAX_MESSAGE_BYTES, v1::{self as pb, proxy_service_server::ProxyService}};
 use moka::{Expiry, future::Cache};
 use reqwest::{Client, Url};
 use tokio::sync::Semaphore;
 use tonic::{Request, Response, Status};
 
-use crate::{
-    convert::{self, Payload},
-    proto::{self as pb, proxy_service_server::ProxyService},
-};
-
-/// Hard limit for decoded HTTP bodies and encoded gRPC responses (32 MiB).
-pub const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
+use crate::convert::{self, Payload};
 
 #[derive(Debug, Clone)]
 pub struct ProxyOptions {

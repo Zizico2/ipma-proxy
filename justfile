@@ -6,23 +6,24 @@ default:
 
 # Run the server, forwarding arguments to the CLI.
 run *args:
-    cargo run -- "$@"
+    cargo run --locked -p ipma-proxy -- "$@"
 
 # Build the development binary and regenerate protobuf bindings.
 build:
-    cargo build --locked
+    cargo build --locked --workspace
 
 # Build the optimized release binary.
 release:
-    cargo build --locked --release
+    cargo build --locked --workspace --release
 
 # Check all targets without producing binaries.
 check:
-    cargo check --locked --all-targets
+    cargo check --locked --workspace --all-targets
 
 # Run tests.
 test:
-    cargo test --locked --all-targets
+    cargo test --locked --workspace --all-targets
+    cargo test --locked --workspace --doc
 
 # Format Rust and protobuf sources.
 fmt:
@@ -36,7 +37,7 @@ fmt-check:
 
 # Run Clippy with warnings treated as errors.
 lint:
-    cargo clippy --locked --all-targets -- -D warnings
+    cargo clippy --locked --workspace --all-targets -- -D warnings
 
 # Lint and compile protobuf schemas.
 proto-check:
@@ -60,23 +61,24 @@ update-geobuf ref='master':
     git -C "$geobuf_tmp/repo" show "$geobuf_revision:LICENSE" > "$geobuf_tmp/LICENSE"
     printf '%s\n' "$geobuf_revision" > "$geobuf_tmp/UPSTREAM_REVISION"
     buf build "$geobuf_tmp/geobuf.proto" -o /dev/null
-    mkdir -p third_party/geobuf
-    mv -- "$geobuf_tmp/geobuf.proto" "$geobuf_tmp/LICENSE" "$geobuf_tmp/UPSTREAM_REVISION" third_party/geobuf/
+    geobuf_dir=crates/geojson-geobuf/third_party/geobuf
+    mkdir -p "$geobuf_dir"
+    mv -- "$geobuf_tmp/geobuf.proto" "$geobuf_tmp/LICENSE" "$geobuf_tmp/UPSTREAM_REVISION" "$geobuf_dir/"
     printf 'Updated Geobuf to %s\n' "$geobuf_revision"
 
 # Call the example Ping RPC on a running server.
 ping address='127.0.0.1:50051':
-    buf curl --schema proto --protocol grpc --http2-prior-knowledge --data '{}' "http://$1/ipma.proxy.v1.ProxyService/Ping"
+    buf curl --schema crates/ipma-proto/proto --protocol grpc --http2-prior-knowledge --data '{}' "http://$1/ipma.proxy.v1.ProxyService/Ping"
 
 # Check all supported selections against a running proxy (contacts upstream).
 smoke address='http://127.0.0.1:50051':
-    cargo run --locked --example smoke -- "$1"
+    cargo run --locked -p ipma-proto --example smoke -- "$1"
 
 # Verify Geobuf output with Mapbox's pinned JavaScript decoder.
 interop:
-    cargo build --locked --example encode_geobuf
-    npm --prefix tests/interop ci --ignore-scripts --no-audit --no-fund
-    npm --prefix tests/interop test
+    cargo build --locked -p geojson-geobuf --example encode_geobuf
+    npm --prefix crates/geojson-geobuf/tests/interop ci --ignore-scripts --no-audit --no-fund
+    npm --prefix crates/geojson-geobuf/tests/interop test
 
 # Run the local validation suite.
 verify: fmt-check check lint test proto-check

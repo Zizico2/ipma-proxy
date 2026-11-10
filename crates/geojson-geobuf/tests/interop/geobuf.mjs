@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { decode } from 'geobuf';
 import Pbf from 'pbf';
 
-const binary = process.env.GEOBUF_ENCODER ?? fileURLToPath(new URL('../../target/debug/examples/encode_geobuf', import.meta.url));
+const binary = process.env.GEOBUF_ENCODER ?? fileURLToPath(new URL('../../../../target/debug/examples/encode_geobuf', import.meta.url));
 const point = { type: 'Point', coordinates: [-9.123456, 38.654321] };
 const ring = [[-9,38],[-8,38],[-8,39],[-9,38]];
 const cases = [

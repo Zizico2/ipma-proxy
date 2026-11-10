@@ -1,11 +1,9 @@
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use ipma_proto::v1::*;
 use prost::Message;
 use serde_json::Value;
 
-use crate::{
-    proto::*,
-    proxy::{Error, Key},
-};
+use crate::proxy::{Error, Key};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -459,7 +457,7 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
         }
         Key::Geo(_) => Payload::Geo(GetGeoDatasetResponse {
             metadata: meta,
-            geobuf: crate::geobuf::encode(&root)
+            geobuf: geojson_geobuf::encode(&root)
                 .map_err(|e| invalid(e.to_string()))?
                 .into(),
         }),
