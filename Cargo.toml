@@ -10,7 +10,7 @@ rust-version = "1.99"
 
 [workspace.dependencies]
 geojson-geobuf = { path = "crates/geojson-geobuf", version = "0.1.0" }
-ipma-proto = { git = "https://github.com/Zizico2/ipma-proto.git", rev = "2be562e77f1859baee5e412cb0122772ecf957a8" }
+ipma-proto = { git = "https://github.com/Zizico2/ipma-proto.git", rev = "bc2cba7db2af35588599cb2b3aaba74894c9418a" }
 ipma-service = { path = "crates/ipma-service", version = "0.1.0" }
 
 anyhow = "1.0.104"
