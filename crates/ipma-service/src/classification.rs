@@ -378,3 +378,107 @@ mod tests {
         assert!(direction_text("").is_none());
     }
 }
+
+// Source identity wrappers are constructed only from the current response.
+// Unknown identities remain valid data, with OTHER and the original value.
+macro_rules! numeric_reference {
+    ($function:ident, $message:ident, $source:ty, $mapping:ident) => {
+        pub(crate) fn $function(source_code: Option<$source>) -> Option<$message> {
+            source_code.map(|source_code| $message {
+                value: crate::reference::$mapping(source_code) as i32,
+                source_code,
+            })
+        }
+    };
+}
+numeric_reference!(region, GeographicRegionValue, u32, geographic_region);
+numeric_reference!(district, DistrictValue, u32, district);
+numeric_reference!(location, ForecastLocationValue, u32, forecast_location);
+numeric_reference!(
+    coastal_location,
+    CoastalLocationValue,
+    u32,
+    coastal_location
+);
+numeric_reference!(station, StationValue, u32, station);
+
+macro_rules! text_reference {
+    ($function:ident, $message:ident, $mapping:ident) => {
+        pub(crate) fn $function(source: &str) -> Option<$message> {
+            (!source.trim().is_empty()).then(|| $message {
+                value: crate::reference::$mapping(source) as i32,
+                source_value: source.to_owned(),
+            })
+        }
+    };
+}
+text_reference!(warning_area, WarningAreaValue, warning_area);
+text_reference!(
+    magnitude_type,
+    SeismicMagnitudeTypeValue,
+    seismic_magnitude_type
+);
+text_reference!(seismic_degree, SeismicDegreeValue, seismic_degree);
+text_reference!(seismic_source, SeismicSourceValue, seismic_source);
+text_reference!(bivalve_zone, BivalveZoneValue, bivalve_zone);
+text_reference!(bivalve_zone_type, BivalveZoneTypeValue, bivalve_zone_type);
+text_reference!(
+    bivalve_zone_status,
+    BivalveZoneStatusValue,
+    bivalve_zone_status
+);
+text_reference!(bivalve_region, BivalveRegionValue, bivalve_region);
+text_reference!(
+    sanitary_class,
+    BivalveSanitaryClassValue,
+    bivalve_sanitary_class
+);
+text_reference!(
+    harvest_permission,
+    BivalveHarvestPermissionValue,
+    bivalve_harvest_permission
+);
+
+pub(crate) fn municipality(
+    source_code: &str,
+    source_district: Option<u32>,
+    source_local_code: Option<u32>,
+) -> Option<MunicipalityValue> {
+    if source_code.trim().is_empty() && source_district.is_none() && source_local_code.is_none() {
+        return None;
+    }
+    Some(MunicipalityValue {
+        value: if source_code.is_empty() {
+            Municipality::Unspecified
+        } else {
+            crate::reference::municipality(source_code)
+        } as i32,
+        source_code: source_code.to_owned(),
+        source_local_code,
+        district: district(source_district),
+    })
+}
+
+pub(crate) fn uv_period(code: Option<i32>, interval: &str) -> Option<UvPeriodValue> {
+    code.filter(|code| *code != -99)
+        .map(|source_code| UvPeriodValue {
+            value: crate::reference::uv_period(source_code) as i32,
+            source_code,
+            peak_hour_interval: interval.to_owned(),
+        })
+}
+
+pub(crate) fn species(source: &str, common_name: &str) -> Option<BivalveSpeciesValue> {
+    if source.trim().is_empty() && common_name.trim().is_empty() {
+        return None;
+    }
+    Some(BivalveSpeciesValue {
+        value: if source.trim().is_empty() {
+            BivalveSpecies::Unspecified
+        } else {
+            crate::reference::bivalve_species(source)
+        } as i32,
+        source_value: source.to_owned(),
+        common_name: common_name.to_owned(),
+    })
+}

@@ -203,12 +203,14 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                 let wind_speed_class = integer(v, "classWindSpeed")?;
                 let precipitation_intensity_class = integer(v, "classPrecInt")?;
                 let prevailing_wind_direction = text(v, "predWindDir")?;
+                let location_id = if matches!(key, Key::WeatherLocation(_)) {
+                    id(&root, "globalIdLocal")?
+                } else {
+                    id(v, "globalIdLocal")?
+                };
                 forecasts.push(WeatherForecast {
-                    location_id: if matches!(key, Key::WeatherLocation(_)) {
-                        id(&root, "globalIdLocal")?
-                    } else {
-                        id(v, "globalIdLocal")?
-                    },
+                    location: classification::location(Some(location_id)),
+                    location_id,
                     date: Some(date(if v["forecastDate"].is_null() {
                         &root["forecastDate"]
                     } else {
@@ -242,8 +244,10 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                     object(v)?;
                     let type_name = string(&v["awarenessTypeName"])?;
                     let level = string(&v["awarenessLevelID"])?;
+                    let area_id = string(&v["idAreaAviso"])?;
                     Ok(Warning {
-                        area_id: string(&v["idAreaAviso"])?,
+                        area: classification::warning_area(&area_id),
+                        area_id,
                         warning_type: classification::warning_type(&type_name),
                         warning_level: classification::warning_level(&level),
                         type_name,
@@ -275,6 +279,7 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                         .ok_or_else(|| invalid("invalid station ID"))?;
                     let wind_direction_code = integer(v, "idDireccVento")?;
                     observations.push(Observation {
+                        station: classification::station(Some(station_id)),
                         station_id,
                         observed_at,
                         temperature_celsius: number(v, "temperatura")?,
@@ -300,8 +305,10 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                 .map(|v| {
                     object(v)?;
                     let prevailing_wave_direction = text(v, "predWaveDir")?;
+                    let location_id = id(v, "globalIdLocal")?;
                     Ok(SeaForecast {
-                        location_id: id(v, "globalIdLocal")?,
+                        location: classification::location(Some(location_id)),
+                        location_id,
                         coordinates: coordinates(v, "latitude", "longitude")?,
                         minimum_wave_period_seconds: number(v, "wavePeriodMin")?,
                         maximum_wave_period_seconds: number(v, "wavePeriodMax")?,
@@ -330,6 +337,7 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                     object(&v["data"])?;
                     let risk_class = integer(&v["data"], "rcm")?;
                     Ok(FireRisk {
+                        municipality: classification::municipality(municipality_id, None, None),
                         municipality_id: municipality_id.clone(),
                         coordinates: coordinates(v, "latitude", "longitude")?,
                         classification: classification::fire_risk(risk_class),
@@ -349,13 +357,18 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                 .iter()
                 .map(|v| {
                     object(v)?;
+                    let location_id = unsigned(v, "globalIdLocal")?
+                        .ok_or_else(|| invalid("missing UV location ID"))?;
+                    let period_code = integer(v, "idPeriodo")?;
+                    let peak_hour_interval = text(v, "intervaloHora")?;
                     Ok(UvForecast {
-                        location_id: unsigned(v, "globalIdLocal")?
-                            .ok_or_else(|| invalid("missing UV location ID"))?,
+                        location: classification::location(Some(location_id)),
+                        period: classification::uv_period(period_code, &peak_hour_interval),
+                        location_id,
                         date: Some(date(&v["data"])?),
                         index: number(v, "iUv")?,
-                        peak_hour_interval: text(v, "intervaloHora")?,
-                        period_code: integer(v, "idPeriodo")?,
+                        peak_hour_interval,
+                        period_code,
                     })
                 })
                 .collect::<Result<_>>()?;
@@ -374,16 +387,24 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                         Value::Bool(b) => Some(*b),
                         _ => return Err(invalid("invalid sensed flag")),
                     };
+                    let magnitude_type = text(v, "magType")?;
+                    let degree = optional_text(v, "degree")?;
+                    let source = text(v, "source")?;
                     Ok(SeismicEvent {
+                        magnitude_classification: classification::magnitude_type(&magnitude_type),
+                        intensity: classification::seismic_degree(
+                            degree.as_deref().unwrap_or_default(),
+                        ),
+                        reporting_source: classification::seismic_source(&source),
                         occurred_at: required_timestamp(&v["time"])?,
                         coordinates: coordinates(v, "lat", "lon")?,
                         magnitude: number(v, "magnitud")?,
-                        magnitude_type: text(v, "magType")?,
+                        magnitude_type,
                         depth_kilometers: number(v, "depth")?,
                         observation_region: text(v, "obsRegion")?,
                         locality: optional_text(v, "local")?,
-                        degree: optional_text(v, "degree")?,
-                        source: text(v, "source")?,
+                        degree,
+                        source,
                         shakemap_id: text(v, "shakemapid")?,
                         updated_at: timestamp(&v["dataUpdate"])?,
                         event_id: optional_text(v, "sismoId")?,
@@ -403,14 +424,32 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                 .iter()
                 .map(|v| {
                     object(v)?;
+                    let district_id = unsigned(v, "idDistrito")?;
+                    let municipality_code = unsigned(v, "idConcelho")?;
+                    // idConcelho is scoped by idDistrito. Only compose a DICO
+                    // when both components are present; retain partial components.
+                    let dico = match (district_id, municipality_code) {
+                        (Some(d), Some(c)) => format!("{d:02}{c:02}"),
+                        _ => String::new(),
+                    };
                     Ok(Location {
+                        location: classification::location(Some(id(v, "globalIdLocal")?)),
+                        warning_area: classification::warning_area(&text(v, "idAreaAviso")?),
+                        region: classification::region(unsigned(v, "idRegiao")?),
+                        district: classification::district(district_id),
+                        municipality: classification::municipality(
+                            &dico,
+                            district_id,
+                            municipality_code,
+                        ),
+                        coastal_location: classification::coastal_location(unsigned(v, "idLocal")?),
                         location_id: id(v, "globalIdLocal")?,
                         name: string(&v["local"])?,
                         coordinates: coordinates(v, "latitude", "longitude")?,
                         warning_area_id: text(v, "idAreaAviso")?,
                         region_id: unsigned(v, "idRegiao")?,
-                        district_id: unsigned(v, "idDistrito")?,
-                        municipality_code: unsigned(v, "idConcelho")?,
+                        district_id,
+                        municipality_code,
                         local_code: unsigned(v, "idLocal")?,
                     })
                 })
@@ -453,7 +492,8 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                 entries,
             })
         }
-        Key::Geo(_) => Payload::Geo(GetGeoDatasetResponse {
+        Key::Geo(dataset) => Payload::Geo(GetGeoDatasetResponse {
+            feature_categories: geo_categories(dataset, &root)?,
             metadata: meta,
             geobuf: geojson_geobuf::encode(&root)
                 .map_err(|e| invalid(e.to_string()))?
@@ -542,6 +582,7 @@ fn climate(dataset: i32, body: &[u8], metadata: SourceMetadata) -> Result<GetCli
                 month: t.month(),
                 day: t.day(),
             }),
+            municipality: classification::municipality(&row[municipality], None, None),
             municipality_id: row[municipality].into(),
             municipality_name: row[name].into(),
             statistics,
@@ -551,4 +592,73 @@ fn climate(dataset: i32, body: &[u8], metadata: SourceMetadata) -> Result<GetCli
         metadata: Some(metadata),
         records,
     })
+}
+
+/// Build typed companions without changing the feature sequence or properties
+/// passed to Geobuf. Only information present in this response is used.
+fn geo_categories(dataset: i32, root: &Value) -> Result<Vec<GeoFeatureCategories>> {
+    array(&root["features"])?
+        .iter()
+        .enumerate()
+        .map(|(index, feature)| {
+            let properties = &feature["properties"];
+            // GeoJSON permits null properties; there are no categories to map.
+            if properties.is_null() {
+                return Ok(None);
+            }
+            object(properties)?;
+            let categories = if dataset == 3 {
+                let mut species_permissions = Vec::new();
+                let interdictions = &properties["interdictions"];
+                if !interdictions.is_null() {
+                    for (group, species) in object(interdictions)? {
+                        // Preserve new grouping names through OTHER rather than
+                        // assuming only the published open/close groups exist.
+                        if species.is_null() {
+                            continue;
+                        }
+                        for species in array(species)? {
+                            object(species)?;
+                            species_permissions.push(BivalveSpeciesPermission {
+                                species: classification::species(
+                                    &text(species, "specie_s")?,
+                                    &text(species, "specie_c")?,
+                                ),
+                                sanitary_class: classification::sanitary_class(&text(
+                                    species,
+                                    "classification",
+                                )?),
+                                permission: classification::harvest_permission(group),
+                            });
+                        }
+                    }
+                }
+                // The documentation uses samp; the current feed uses code.
+                // Both originals remain available in Geobuf if both are supplied.
+                let zone = if properties["code"].is_null() {
+                    text(properties, "samp")?
+                } else {
+                    text(properties, "code")?
+                };
+                geo_feature_categories::Categories::BivalveZone(BivalveZoneCategories {
+                    zone: classification::bivalve_zone(&zone),
+                    zone_type: classification::bivalve_zone_type(&text(properties, "zone_type")?),
+                    status: classification::bivalve_zone_status(&text(properties, "status")?),
+                    region: classification::bivalve_region(&text(properties, "region_name")?),
+                    species_permissions,
+                })
+            } else {
+                geo_feature_categories::Categories::Station(StationReference {
+                    station: classification::station(unsigned(properties, "idEstacao")?),
+                    name: optional_text(properties, "localEstacao")?,
+                })
+            };
+            Ok(Some(GeoFeatureCategories {
+                feature_index: u32::try_from(index)
+                    .map_err(|_| invalid("too many GeoJSON features"))?,
+                categories: Some(categories),
+            }))
+        })
+        .filter_map(|entry| entry.transpose())
+        .collect()
 }

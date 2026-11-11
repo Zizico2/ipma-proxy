@@ -85,9 +85,14 @@ directions retain either source text or a numeric code. Existing raw fields
 remain available. Missing categories are absent; unfamiliar values map to
 `OTHER` with the original source retained. Reference-table entries compose a
 `classification` oneof with the original code and bilingual descriptions.
-Districts, municipalities, warning areas and location/station IDs remain
-identifiers. UV risk is not derived from measurements, and Geobuf properties
-are not remapped. See [category semantics](https://github.com/Zizico2/ipma-proto/blob/main/docs/categories.md).
+Reference identities also carry typed region, district, municipality, warning-area,
+location and station wrappers. The source ID remains authoritative; enum numbers
+are not source IDs. Municipalities retain full DICO plus district-scoped components
+when supplied. UV periods and seismic tokens are classified without guessing
+undocumented meanings. Large catalogues use partial snapshots with `OTHER` fallbacks.
+UV risk is not derived from measurements. Geobuf properties remain unchanged;
+`feature_categories` associates typed station/bivalve companions by feature index.
+Mapping uses compile-time matches and requires no additional upstream requests. See [category semantics](https://github.com/Zizico2/ipma-proto/blob/main/docs/categories.md).
 
 `GetGeoDatasetResponse.geobuf` is a raw Mapbox Geobuf Data message. Decode with
 `geobuf.decode(new Pbf(response.geobuf))`. The stations array is wrapped in a

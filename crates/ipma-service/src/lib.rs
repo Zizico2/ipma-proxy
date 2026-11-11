@@ -7,5 +7,6 @@
 mod classification;
 mod convert;
 mod proxy;
+mod reference;
 
 pub use proxy::{Proxy, ProxyOptions};

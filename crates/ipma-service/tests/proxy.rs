@@ -161,6 +161,14 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
         .unwrap()
         .into_inner();
     assert_eq!(f.forecasts[0].location_id, 1110600);
+    assert_eq!(
+        f.forecasts[0].location.as_ref().unwrap().value(),
+        ForecastLocation::Lisboa1110600
+    );
+    assert_eq!(
+        f.forecasts[0].location.as_ref().unwrap().source_code,
+        1110600
+    );
     assert_eq!(f.forecasts[0].minimum_temperature_celsius, Some(16.5));
     let first = &f.forecasts[0];
     let weather = first.weather_type.as_ref().unwrap();
@@ -202,6 +210,10 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
         .unwrap()
         .into_inner();
     assert_eq!(warnings.warnings[0].level, "orange");
+    assert_eq!(
+        warnings.warnings[0].area.as_ref().unwrap().source_value,
+        warnings.warnings[0].area_id
+    );
     let warning = &warnings.warnings[0];
     assert_eq!(
         warning.warning_level.as_ref().unwrap().value(),
@@ -227,6 +239,12 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
         .into_inner()
         .observations;
     assert_eq!(observations.len(), 2);
+    for observation in &observations {
+        assert_eq!(
+            observation.station.as_ref().unwrap().source_code,
+            observation.station_id
+        );
+    }
     assert_eq!(observations[0].temperature_celsius, Some(0.0));
     assert_eq!(observations[0].wind_direction_code, Some(0));
     assert_eq!(
@@ -261,40 +279,95 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
         .unwrap()
         .into_inner();
     assert_eq!(fire.risks[0].municipality_id, "0101");
+    assert_eq!(
+        fire.risks[0].municipality.as_ref().unwrap().value(),
+        Municipality::Agueda0101
+    );
+    assert_eq!(
+        fire.risks[0].municipality.as_ref().unwrap().source_code,
+        "0101"
+    );
     assert_eq!(fire.risks[0].risk_class, Some(1));
     let risk = fire.risks[0].classification.as_ref().unwrap();
     assert_eq!(risk.value(), FireRiskClass::Reduced);
     assert_eq!(Some(risk.source_code), fire.risks[0].risk_class);
-    assert!(
-        !h.client
-            .get_uv_forecast(GetUvForecastRequest {})
+    let uv = h
+        .client
+        .get_uv_forecast(GetUvForecastRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        uv.forecasts[0].period.as_ref().unwrap().value(),
+        UvPeriod::Code10
+    );
+    assert_eq!(
+        uv.forecasts[2].location.as_ref().unwrap().value(),
+        ForecastLocation::Unspecified
+    );
+    assert_eq!(uv.forecasts[2].location.as_ref().unwrap().source_code, 0);
+    for region in [1, 2] {
+        let events = h
+            .client
+            .get_seismic_events(GetSeismicEventsRequest { region })
             .await
             .unwrap()
             .into_inner()
-            .forecasts
-            .is_empty()
-    );
-    for region in [1, 2] {
-        assert!(
-            !h.client
-                .get_seismic_events(GetSeismicEventsRequest { region })
-                .await
-                .unwrap()
-                .into_inner()
-                .events
-                .is_empty()
+            .events;
+        assert_eq!(
+            events[0].magnitude_classification.as_ref().unwrap().value(),
+            SeismicMagnitudeType::CodeL
         );
+        assert_eq!(
+            events[0].reporting_source.as_ref().unwrap().value(),
+            SeismicSource::Ipma
+        );
+        assert!(events[0].intensity.is_none());
     }
     for kind in [1, 2] {
-        assert!(
-            !h.client
-                .get_locations(GetLocationsRequest { kind })
-                .await
-                .unwrap()
-                .into_inner()
-                .locations
-                .is_empty()
+        let locations = h
+            .client
+            .get_locations(GetLocationsRequest { kind })
+            .await
+            .unwrap()
+            .into_inner()
+            .locations;
+        assert_eq!(
+            locations[0].location.as_ref().unwrap().source_code,
+            locations[0].location_id
         );
+        assert_eq!(
+            locations[0].region.as_ref().unwrap().value(),
+            GeographicRegion::Mainland
+        );
+        if kind == 1 {
+            assert_eq!(
+                locations[0].municipality.as_ref().unwrap().value(),
+                Municipality::Aveiro0105
+            );
+            assert_eq!(
+                locations[0]
+                    .municipality
+                    .as_ref()
+                    .unwrap()
+                    .source_local_code,
+                Some(5)
+            );
+            assert_eq!(
+                locations[0]
+                    .municipality
+                    .as_ref()
+                    .unwrap()
+                    .district
+                    .as_ref()
+                    .unwrap()
+                    .value(),
+                District::Aveiro
+            );
+        } else {
+            assert!(locations[0].municipality.is_none());
+            assert!(locations[0].coastal_location.is_some());
+        }
     }
     assert_eq!(
         sea.forecasts[0].wave_direction.as_ref().unwrap().value(),
@@ -338,15 +411,24 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
         }
     }
     for dataset in [1, 2, 3] {
-        assert!(
-            !h.client
-                .get_geo_dataset(GetGeoDatasetRequest { dataset })
-                .await
-                .unwrap()
-                .into_inner()
-                .geobuf
-                .is_empty()
-        );
+        let response = h
+            .client
+            .get_geo_dataset(GetGeoDatasetRequest { dataset })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!response.geobuf.is_empty());
+        assert!(!response.feature_categories.is_empty());
+        assert_eq!(response.feature_categories[0].feature_index, 0);
+        if dataset != 3 {
+            let Some(geo_feature_categories::Categories::Station(station)) =
+                &response.feature_categories[0].categories
+            else {
+                panic!("lost station reference");
+            };
+            assert_ne!(station.station.as_ref().unwrap().value(), Station::Other);
+            assert!(station.name.is_some());
+        }
     }
     for dataset in [1, 2, 3] {
         let climate = h
@@ -357,6 +439,10 @@ async fn every_documented_dataset_has_typed_values_and_metadata() {
             .into_inner();
         assert_eq!(climate.records[0].municipality_id, "0101");
         assert!(!climate.records[0].statistics.is_empty());
+        assert_eq!(
+            climate.records[0].municipality.as_ref().unwrap().value(),
+            Municipality::Agueda0101
+        );
         if dataset == 1 {
             assert_eq!(climate.records[0].statistics[0].mean, Some(0.0));
             assert_eq!(climate.records[0].statistics[0].minimum, None);
@@ -828,4 +914,231 @@ async fn station_direction_aliases_keep_their_original_codes() {
         Some(direction_value::Source::Code(99))
     );
     assert!(observations[3].wind_direction.is_none());
+}
+
+#[tokio::test]
+async fn municipality_components_stay_scoped_and_unknown_identifiers_survive() {
+    let mut h = harness(StatusCode::OK, Some(r#"{"data":[
+      {"globalIdLocal":1010100,"local":"Águeda","idDistrito":1,"idConcelho":1},
+      {"globalIdLocal":1020100,"local":"Aljustrel","idDistrito":2,"idConcelho":1},
+      {"globalIdLocal":9999999,"local":"Future","idDistrito":99,"idConcelho":1,"idRegiao":99,"idAreaAviso":"FUTURE"},
+      {"globalIdLocal":9999998,"local":"Partial","idConcelho":1}
+    ]}"#), Duration::ZERO, 10000, Duration::from_secs(2)).await;
+    let rows = h
+        .client
+        .get_locations(GetLocationsRequest { kind: 1 })
+        .await
+        .unwrap()
+        .into_inner()
+        .locations;
+    let first = rows[0].municipality.as_ref().unwrap();
+    let second = rows[1].municipality.as_ref().unwrap();
+    assert_eq!(first.value(), Municipality::Agueda0101);
+    assert_eq!(second.value(), Municipality::Aljustrel0201);
+    assert_eq!(first.source_local_code, second.source_local_code);
+    assert_ne!(first.source_code, second.source_code);
+    let future = &rows[2];
+    assert_eq!(
+        future.location.as_ref().unwrap().value(),
+        ForecastLocation::Other
+    );
+    assert_eq!(future.location.as_ref().unwrap().source_code, 9999999);
+    assert_eq!(
+        future.municipality.as_ref().unwrap().value(),
+        Municipality::Other
+    );
+    assert_eq!(future.municipality.as_ref().unwrap().source_code, "9901");
+    assert_eq!(future.district.as_ref().unwrap().source_code, 99);
+    assert_eq!(
+        future.region.as_ref().unwrap().value(),
+        GeographicRegion::Other
+    );
+    assert_eq!(future.warning_area.as_ref().unwrap().source_value, "FUTURE");
+    let partial = rows[3].municipality.as_ref().unwrap();
+    assert_eq!(partial.source_code, "");
+    assert_eq!(partial.source_local_code, Some(1));
+    assert!(partial.district.is_none());
+    assert_eq!(h.count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn uv_internal_codes_keep_zero_unknown_and_missing_distinct() {
+    let mut h = harness(StatusCode::OK, Some(r#"[
+      {"globalIdLocal":0,"data":"2026-11-10","idPeriodo":0,"intervaloHora":"14h-14h"},
+      {"globalIdLocal":9999999,"data":"2026-11-10","idPeriodo":999,"intervaloHora":"future interval"},
+      {"globalIdLocal":0,"data":"2026-11-10","idPeriodo":-99}
+    ]"#), Duration::ZERO, 10000, Duration::from_secs(2)).await;
+    let rows = h
+        .client
+        .get_uv_forecast(GetUvForecastRequest {})
+        .await
+        .unwrap()
+        .into_inner()
+        .forecasts;
+    assert_eq!(rows[0].period.as_ref().unwrap().value(), UvPeriod::Code0);
+    assert_eq!(rows[0].period.as_ref().unwrap().source_code, 0);
+    assert_eq!(
+        rows[0].period.as_ref().unwrap().peak_hour_interval,
+        "14h-14h"
+    );
+    assert_eq!(rows[1].period.as_ref().unwrap().value(), UvPeriod::Other);
+    assert_eq!(rows[1].period.as_ref().unwrap().source_code, 999);
+    assert_eq!(
+        rows[1].location.as_ref().unwrap().value(),
+        ForecastLocation::Other
+    );
+    assert!(rows[2].period.is_none());
+}
+
+#[tokio::test]
+async fn geobuf_companions_preserve_indices_source_tokens_and_original_bytes() {
+    const BODY: &str = r#"{"type":"FeatureCollection","features":[
+      {"type":"Feature","geometry":null,"properties":null},
+      {"type":"Feature","geometry":null,"properties":{"samp":"L1","zone_type":"LITORAL","region_name":"Norte","status":"CLOSED","interdictions":{"open":[{"specie_s":"Patella spp.","specie_c":"Lapa","classification":"B*"}]}}},
+      {"type":"Feature","geometry":null,"properties":{"code":"FUTURE","status":"CLOSE","zone_type":"FUTURE","region_name":"New region","extra":{"untouched":true},"interdictions":{"pending":[{"specie_s":"Future taxon","specie_c":"Future label","classification":"D"}]}}}
+    ]}"#;
+    let mut h = harness(
+        StatusCode::OK,
+        Some(BODY),
+        Duration::ZERO,
+        10000,
+        Duration::from_secs(2),
+    )
+    .await;
+    let result = h
+        .client
+        .get_geo_dataset(GetGeoDatasetRequest { dataset: 3 })
+        .await
+        .unwrap()
+        .into_inner();
+    let root: serde_json::Value = serde_json::from_str(BODY).unwrap();
+    assert_eq!(
+        result.geobuf.as_ref(),
+        geojson_geobuf::encode(&root).unwrap()
+    );
+    assert_eq!(result.feature_categories.len(), 2);
+    assert_eq!(result.feature_categories[0].feature_index, 1);
+    assert_eq!(result.feature_categories[1].feature_index, 2);
+    let zone = |entry: &GeoFeatureCategories| match entry.categories.as_ref().unwrap() {
+        geo_feature_categories::Categories::BivalveZone(zone) => zone.clone(),
+        _ => panic!("wrong feature category"),
+    };
+    let first = zone(&result.feature_categories[0]);
+    assert_eq!(first.zone.as_ref().unwrap().value(), BivalveZone::L1);
+    assert_eq!(
+        first.status.as_ref().unwrap().value(),
+        BivalveZoneStatus::Closed
+    );
+    let species = &first.species_permissions[0];
+    assert_eq!(
+        species.species.as_ref().unwrap().value(),
+        BivalveSpecies::PatellaSpp
+    );
+    assert_eq!(species.species.as_ref().unwrap().common_name, "Lapa");
+    assert_eq!(
+        species.sanitary_class.as_ref().unwrap().value(),
+        BivalveSanitaryClass::BStar
+    );
+    assert_eq!(species.sanitary_class.as_ref().unwrap().source_value, "B*");
+    let future = zone(&result.feature_categories[1]);
+    assert_eq!(
+        future.status.as_ref().unwrap().value(),
+        BivalveZoneStatus::Close
+    );
+    assert_eq!(future.zone.as_ref().unwrap().value(), BivalveZone::Other);
+    assert_eq!(future.zone.as_ref().unwrap().source_value, "FUTURE");
+    assert_eq!(
+        future.species_permissions[0]
+            .permission
+            .as_ref()
+            .unwrap()
+            .value(),
+        BivalveHarvestPermission::Other
+    );
+    assert_eq!(
+        future.species_permissions[0]
+            .permission
+            .as_ref()
+            .unwrap()
+            .source_value,
+        "pending"
+    );
+    assert_eq!(
+        future.species_permissions[0]
+            .species
+            .as_ref()
+            .unwrap()
+            .source_value,
+        "Future taxon"
+    );
+    assert_eq!(
+        future.species_permissions[0]
+            .sanitary_class
+            .as_ref()
+            .unwrap()
+            .source_value,
+        "D"
+    );
+    assert_eq!(h.count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn seismic_reference_tokens_are_lossless_without_semantic_inference() {
+    let mut h = harness(StatusCode::OK, Some(r#"{"data":[
+      {"time":"2026-11-10T00:00:00","magType":"W","source":"GFZ","degree":"III/IV"},
+      {"time":"2026-11-10T01:00:00","magType":"FUTURE","source":"New source","degree":"Future intensity"},
+      {"time":"2026-11-10T02:00:00","magType":"","source":"","degree":null}
+    ]}"#), Duration::ZERO, 10000, Duration::from_secs(2)).await;
+    let rows = h
+        .client
+        .get_seismic_events(GetSeismicEventsRequest { region: 1 })
+        .await
+        .unwrap()
+        .into_inner()
+        .events;
+    assert_eq!(
+        rows[0].magnitude_classification.as_ref().unwrap().value(),
+        SeismicMagnitudeType::CodeW
+    );
+    assert_eq!(
+        rows[0].reporting_source.as_ref().unwrap().value(),
+        SeismicSource::Gfz
+    );
+    assert_eq!(
+        rows[0].intensity.as_ref().unwrap().value(),
+        SeismicDegree::IiiToIv
+    );
+    assert_eq!(rows[0].intensity.as_ref().unwrap().source_value, "III/IV");
+    assert_eq!(
+        rows[1].magnitude_classification.as_ref().unwrap().value(),
+        SeismicMagnitudeType::Other
+    );
+    assert_eq!(
+        rows[1]
+            .magnitude_classification
+            .as_ref()
+            .unwrap()
+            .source_value,
+        "FUTURE"
+    );
+    assert_eq!(
+        rows[1].reporting_source.as_ref().unwrap().value(),
+        SeismicSource::Other
+    );
+    assert_eq!(
+        rows[1].reporting_source.as_ref().unwrap().source_value,
+        "New source"
+    );
+    assert_eq!(
+        rows[1].intensity.as_ref().unwrap().value(),
+        SeismicDegree::Other
+    );
+    assert_eq!(
+        rows[1].intensity.as_ref().unwrap().source_value,
+        "Future intensity"
+    );
+    assert!(rows[2].magnitude_classification.is_none());
+    assert!(rows[2].reporting_source.is_none());
+    assert!(rows[2].intensity.is_none());
+    assert_eq!(h.count.load(Ordering::SeqCst), 1);
 }
