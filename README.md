@@ -144,3 +144,13 @@ and refresh Cargo.lock in both service repositories.
 IPMA's API page contains its current usage conditions and attribution
 requirements and requests that users notify webmaster@ipma.pt of intended
 use. The adapter preserves IPMA attribution and never contacts that address.
+
+## Generated upstream client
+
+HTTP operations use the corresponding `ipma-openapi` generated `raw::Client`,
+pinned to an exact Git revision in Cargo.toml and Cargo.lock. The proxy injects
+its existing TLS-verified reqwest transport, timeout and no-redirect/no-retry
+policy. Streaming responses pass through the decompressed body cap before the
+existing bounded blocking conversion into protobuf. No typed JSON decode/re-encode
+occurs, so source nulls, unknown fields, numeric spellings and Geobuf properties
+retain their existing semantics. The gateway and gRPC contract are unchanged.

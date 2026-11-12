@@ -4,11 +4,13 @@ use std::{
 };
 
 use bytes::BytesMut;
+use futures_util::StreamExt;
+use ipma_open_data_client::raw::Client as ApiClient;
 use ipma_proto::{
     MAX_MESSAGE_BYTES,
     v1::{self as pb, proxy_service_server::ProxyService},
 };
-use reqwest::{Client, Url};
+use reqwest::{Client as HttpClient, Url};
 use tokio::sync::Semaphore;
 use tonic::{Request, Response, Status};
 
@@ -47,6 +49,21 @@ pub(crate) enum Error {
     Invalid(String),
     #[error("conversion worker failed: {0}")]
     Worker(#[from] tokio::task::JoinError),
+}
+
+impl From<ipma_open_data_client::Error<()>> for Error {
+    fn from(error: ipma_open_data_client::Error<()>) -> Self {
+        use ipma_open_data_client::Error as ClientError;
+        match error {
+            ClientError::CommunicationError(error) | ClientError::ResponseBodyError(error) => {
+                Self::Http(error)
+            }
+            error => match error.status() {
+                Some(status) => Self::HttpStatus(status.as_u16()),
+                None => Self::Invalid(error.to_string()),
+            },
+        }
+    }
 }
 
 impl Error {
@@ -110,7 +127,7 @@ impl Key {
 /// Clones share the HTTP connection pool and fetch permits. Each data RPC fetches IPMA.
 #[derive(Clone)]
 pub struct Proxy {
-    client: Client,
+    client: ApiClient,
     options: ProxyOptions,
     permits: Arc<Semaphore>,
 }
@@ -144,7 +161,7 @@ impl Proxy {
                 && options.upstream_timeout <= Duration::from_secs(300),
             "fetch concurrency must not exceed 256 and timeout must not exceed 300 seconds"
         );
-        let client = Client::builder()
+        let client = HttpClient::builder()
             .user_agent(concat!(
                 env!("CARGO_PKG_NAME"),
                 "/",
@@ -158,6 +175,10 @@ impl Proxy {
             .tcp_nodelay(true)
             .gzip(true)
             .build()?;
+        let client = ApiClient::new_with_client(
+            options.upstream_base_url.as_str().trim_end_matches('/'),
+            client,
+        );
         let permits = Arc::new(Semaphore::new(options.max_concurrent_fetches));
         Ok(Self {
             client,
@@ -173,6 +194,51 @@ impl Proxy {
         })
     }
 
+    async fn request(
+        &self,
+        key: Key,
+    ) -> Result<ipma_open_data_client::ResponseValue<ipma_open_data_client::ByteStream>, Error>
+    {
+        let response = match key {
+            Key::WeatherLocation(id) => {
+                self.client
+                    .get_city_daily_forecast(
+                        u64::from(id)
+                            .try_into()
+                            .map_err(|_| Error::Invalid("invalid location ID".into()))?,
+                    )
+                    .await
+            }
+            Key::WeatherDay(day) => self.client.get_daily_forecasts(i64::from(day)).await,
+            Key::Warnings => self.client.get_warnings().await,
+            Key::Observations => self.client.get_observations().await,
+            Key::Sea(day) => self.client.get_sea_forecasts(i64::from(day)).await,
+            Key::Fire(day) => self.client.get_fire_risk(i64::from(day)).await,
+            Key::Uv => self.client.get_uv_forecasts().await,
+            Key::Seismic(area) => {
+                self.client
+                    .get_seismic_events(
+                        &i64::from(area)
+                            .try_into()
+                            .map_err(|_| Error::Invalid("invalid seismic area".into()))?,
+                    )
+                    .await
+            }
+            Key::Locations(1) => self.client.get_locations().await,
+            Key::Locations(_) => self.client.get_sea_locations().await,
+            Key::Codes(1) => self.client.get_weather_codes().await,
+            Key::Codes(2) => self.client.get_wind_codes().await,
+            Key::Codes(_) => self.client.get_precipitation_codes().await,
+            Key::Geo(1) => self.client.get_recent_observations_geojson().await,
+            Key::Geo(2) => self.client.get_stations().await,
+            Key::Geo(_) => self.client.get_bivalve_zones().await,
+            Key::Climate(1) => self.client.get_climate_evapotranspiration().await,
+            Key::Climate(2) => self.client.get_climate_precipitation().await,
+            Key::Climate(_) => self.client.get_climate_temperature().await,
+        };
+        response.map_err(Into::into)
+    }
+
     async fn fetch(&self, key: Key) -> Result<Payload, Error> {
         let permit = self
             .permits
@@ -185,18 +251,20 @@ impl Proxy {
             .join(&key.path())
             .map_err(|e| Error::Invalid(e.to_string()))?;
         let started = Instant::now();
-        let mut response = self.client.get(url.clone()).send().await?;
-        if !response.status().is_success() {
-            return Err(Error::HttpStatus(response.status().as_u16()));
-        }
+        let response = self.request(key).await?;
         let limit = self.options.max_body_bytes;
-        if response.content_length().is_some_and(|n| n > limit as u64) {
+        let length = response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        if length.is_some_and(|n| n > limit as u64) {
             return Err(Error::TooLarge);
         }
-        let mut body = BytesMut::with_capacity(
-            response.content_length().unwrap_or(8192).min(limit as u64) as usize,
-        );
-        while let Some(chunk) = response.chunk().await? {
+        let mut body = BytesMut::with_capacity(length.unwrap_or(8192).min(limit as u64) as usize);
+        let mut stream = response.into_inner_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
             if chunk.len() > limit - body.len() {
                 return Err(Error::TooLarge);
             }
