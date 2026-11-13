@@ -80,7 +80,7 @@ async fn harness(
         body,
         delay,
         ProxyOptions {
-            max_body_bytes: limit,
+            max_response_bytes: limit,
             upstream_timeout: timeout,
             max_concurrent_fetches: 1,
             ..Default::default()
@@ -612,10 +612,10 @@ async fn upstream_errors_are_mapped_and_each_call_is_forwarded() {
 }
 
 #[tokio::test]
-async fn body_size_and_time_limits_are_enforced() {
+async fn response_size_and_time_limits_are_enforced() {
     let mut h = harness(
         StatusCode::OK,
-        Some("1234567890"),
+        None,
         Duration::ZERO,
         4,
         Duration::from_secs(2),
@@ -743,19 +743,22 @@ async fn cancelled_fetch_releases_capacity() {
 }
 
 #[tokio::test]
-async fn chunked_and_gzipped_bodies_cannot_bypass_the_decompressed_size_limit() {
+async fn generated_client_decodes_chunked_gzip_and_response_limit_still_applies() {
     use axum::{body::Body, http::Response};
     use ipma_proto::v1::proxy_service_server::ProxyService;
     use std::io::Write;
     for compressed in [false, true] {
-        let input = vec![b' '; 10_000];
+        let warning = serde_json::json!({
+            "idAreaAviso":"A", "awarenessTypeName":"Rain", "awarenessLevelID":"yellow",
+            "startTime":"2026-11-10T00:00:00", "endTime":"2026-11-11T00:00:00",
+            "text":"x".repeat(10_000),
+        });
+        let input = serde_json::to_vec(&serde_json::json!([warning])).unwrap();
         let body = if compressed {
             let mut encoder =
                 flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
             encoder.write_all(&input).unwrap();
-            let encoded = encoder.finish().unwrap();
-            assert!(encoded.len() < 128);
-            encoded
+            encoder.finish().unwrap()
         } else {
             input
         };
@@ -787,7 +790,7 @@ async fn chunked_and_gzipped_bodies_cannot_bypass_the_decompressed_size_limit() 
         });
         let proxy = Proxy::new(ProxyOptions {
             upstream_base_url: format!("http://{address}/open-data/").parse().unwrap(),
-            max_body_bytes: 128,
+            max_response_bytes: 1024,
             ..Default::default()
         })
         .unwrap();

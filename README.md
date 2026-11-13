@@ -32,8 +32,8 @@ This Cargo workspace contains three crates:
 | [`ipma-service`](crates/ipma-service) | One-to-one HTTP fetching, data mappings and gRPC implementation |
 | [`ipma-proxy`](crates/ipma-proxy) | CLI/env configuration, tracing, health, reflection and shutdown |
 
-Connection pooling, TLS verification, request timeouts, decompressed body
-limits and bounded conversion work are transport safeguards. Caching,
+Connection pooling, TLS verification, request timeouts, response
+limits and bounded fetch concurrency are transport safeguards. Caching,
 authentication, quotas and application rate limits belong in ipma-gateway.
 There is no Moka dependency or cache policy in the adapter.
 
@@ -103,12 +103,11 @@ reprojection. See the [converter](crates/geojson-geobuf/README.md) and
 `just update-geobuf [tag-or-commit]` refreshes the schema/license and records
 the source revision; `just interop` checks against Mapbox's pinned JS decoder.
 
-The reqwest client shares HTTPS connections, validates certificates and
-negotiates gzip. Response limits apply while reading decompressed chunks,
-including chunked bodies without Content-Length. JSON/CSV conversion and
-Geobuf encoding run on blocking workers with permits held until completion,
-even if the originating RPC is cancelled. Exceeding fetch/conversion capacity
-returns RESOURCE_EXHAUSTED. IPMA timeouts return DEADLINE_EXCEEDED, 404 returns
+The standard generated client shares reqwest HTTPS connections, validates
+certificates and negotiates gzip. It buffers and decodes JSON responses with
+no pre-decode HTTP body cap. The configured limit applies to encoded protobuf
+responses. Fetch concurrency is bounded; exceeding capacity returns
+RESOURCE_EXHAUSTED. IPMA timeouts return DEADLINE_EXCEEDED, 404 returns
 NOT_FOUND, rate limits/server failures return UNAVAILABLE, and malformed or
 unsupported data returns DATA_LOSS.
 
@@ -122,7 +121,7 @@ Configuration: CLI arguments override environment, which overrides optional
 | `IPMA_PROXY_UPSTREAM_BASE_URL` | `https://api.ipma.pt/open-data/` |
 | `IPMA_PROXY_UPSTREAM_TIMEOUT_SECONDS` | `15` |
 | `IPMA_PROXY_MAX_CONCURRENT_FETCHES` | `8` |
-| `IPMA_PROXY_MAX_BODY_MIB` | `32` |
+| `IPMA_PROXY_MAX_RESPONSE_MIB` | `32` |
 | `RUST_LOG` | `ipma_proxy=info,ipma_service=info` |
 
 The upstream base must be an HTTPS directory URL without credentials, query
@@ -134,7 +133,7 @@ shorten it. gRPC gzip is negotiated by clients.
 `just verify` runs workspace formatting, Clippy with warnings denied,
 integration tests and doctests. Tests prove that repeated/concurrent accepted
 calls each fetch upstream, as well as dataset mapping, validation, error
-mapping, cancellation, capacity, timeouts and chunked/gzip size limits.
+mapping, cancellation, capacity, timeouts, chunked/gzip decoding and protobuf size limits.
 The service fixtures are IPMA excerpts from 2026-11-10 with synthetic cases
 for missing values. Node/npm and Buf are only needed for the optional
 Geobuf interoperability/update tools. Schema lint/breaking checks live in
@@ -147,10 +146,11 @@ use. The adapter preserves IPMA attribution and never contacts that address.
 
 ## Generated upstream client
 
-HTTP operations use the corresponding `ipma-openapi` generated `raw::Client`,
-with the existing configured HTTP client and decompressed body-size limit.
-After the bounded read, the blocking conversion worker deserializes JSON into
-that crate's generated response models and maps their fields directly to protobuf.
-The original GeoJSON is retained separately for Geobuf encoding, so nulls,
-unknown properties and source property values survive. Climate CSV responses
-keep their explicit CSV parser.
+HTTP operations call the standard Progenitor-generated `Client` from
+[`ipma-openapi`](https://github.com/Zizico2/ipma-openapi) and use its returned
+models directly. The proxy configures reqwest timeouts, TLS, gzip and redirects
+through the standard constructor. There is no custom streaming client, manual
+JSON response decoder, or transport wrapper. JSON responses are buffered and
+decoded by the generated client; size checks apply to the protobuf response.
+The standard non-JSON `ByteStream` responses are collected for the CSV parser
+and Geobuf encoder. Station features come from the generated model.

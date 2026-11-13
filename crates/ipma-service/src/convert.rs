@@ -133,23 +133,38 @@ pub(crate) fn parse_timestamp(s: &str) -> Result<prost_types::Timestamp> {
     Err(invalid("invalid timestamp"))
 }
 
-pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Result<Payload> {
+pub(crate) async fn fetch(
+    client: &ipma_open_data_client::Client,
+    key: Key,
+    mut metadata: SourceMetadata,
+) -> Result<Payload> {
     match key {
-        Key::Climate(dataset) => climate(dataset, body, metadata).map(Payload::Climate),
-        Key::Geo(dataset) => {
-            let mut root: Value =
-                serde_json::from_slice(body).map_err(|e| invalid(e.to_string()))?;
-            let features = if dataset == 2 {
-                let features: Vec<ipma_open_data_client::types::GeoFeature> =
-                    serde_json::from_slice(body).map_err(|e| invalid(e.to_string()))?;
-                root = serde_json::json!({"type":"FeatureCollection","features":root});
-                features
-            } else {
-                let collection: ipma_open_data_client::types::GeoFeatureCollection =
-                    serde_json::from_slice(body).map_err(|e| invalid(e.to_string()))?;
-                collection.features
+        Key::Climate(dataset) => {
+            let response = match dataset {
+                1 => client.get_climate_evapotranspiration().await?,
+                2 => client.get_climate_precipitation().await?,
+                _ => client.get_climate_temperature().await?,
             };
-            // Preserve collection update metadata alongside the source GeoJSON.
+            let body = binary_body(response).await?;
+            metadata.fetched_at = Some(std::time::SystemTime::now().into());
+            climate(dataset, &body, metadata).map(Payload::Climate)
+        }
+        Key::Geo(dataset) => {
+            let root = match dataset {
+                2 => {
+                    serde_json::json!({"type":"FeatureCollection", "features": client.get_stations().await?.into_inner()})
+                }
+                _ => {
+                    let response = if dataset == 1 {
+                        client.get_recent_observations_geojson().await?
+                    } else {
+                        client.get_bivalve_zones().await?
+                    };
+                    serde_json::from_slice::<Value>(&binary_body(response).await?)
+                        .map_err(|e| invalid(e.to_string()))?
+                }
+            };
+            metadata.fetched_at = Some(std::time::SystemTime::now().into());
             for field in ["dataUpdate", "updateDate", "fileDate"] {
                 if !root[field].is_null() {
                     metadata.upstream_updated_at = match root[field].as_str() {
@@ -161,15 +176,28 @@ pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Res
                 }
             }
             Ok(Payload::Geo(GetGeoDatasetResponse {
-                feature_categories: geo_categories(dataset, &features)?,
+                feature_categories: geo_categories(dataset, &root)?,
                 metadata: Some(metadata),
                 geobuf: geojson_geobuf::encode(&root)
                     .map_err(|e| invalid(e.to_string()))?
                     .into(),
             }))
         }
-        _ => crate::typed::decode(key, body, metadata),
+        _ => crate::typed::fetch(client, key, metadata).await,
     }
+}
+
+// Progenitor returns a ByteStream for non-JSON content. Only these formats
+// need collecting before the CSV parser or Geobuf encoder can consume them.
+async fn binary_body(
+    response: ipma_open_data_client::ResponseValue<ipma_open_data_client::ByteStream>,
+) -> Result<Vec<u8>> {
+    use futures_util::TryStreamExt;
+    Ok(response
+        .into_inner_stream()
+        .try_collect::<Vec<_>>()
+        .await?
+        .concat())
 }
 
 fn climate(dataset: i32, body: &[u8], metadata: SourceMetadata) -> Result<GetClimateResponse> {
@@ -265,20 +293,12 @@ fn climate(dataset: i32, body: &[u8], metadata: SourceMetadata) -> Result<GetCli
 
 /// Build typed companions without changing the feature sequence or properties
 /// passed to Geobuf. Only information present in this response is used.
-fn geo_categories(
-    dataset: i32,
-    features: &[ipma_open_data_client::types::GeoFeature],
-) -> Result<Vec<GeoFeatureCategories>> {
-    features
+fn geo_categories(dataset: i32, root: &Value) -> Result<Vec<GeoFeatureCategories>> {
+    array(&root["features"])?
         .iter()
         .enumerate()
         .map(|(index, feature)| {
-            let properties = feature
-                .properties
-                .as_ref()
-                .map(|p| Value::Object(p.clone()))
-                .unwrap_or(Value::Null);
-            let properties = &properties;
+            let properties = &feature["properties"];
             // GeoJSON permits null properties; there are no categories to map.
             if properties.is_null() {
                 return Ok(None);

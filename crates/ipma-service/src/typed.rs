@@ -10,9 +10,6 @@ type Result<T> = std::result::Result<T, Error>;
 fn invalid(message: impl Into<String>) -> Error {
     Error::Invalid(message.into())
 }
-fn parse<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T> {
-    serde_json::from_slice(body).map_err(|e| invalid(e.to_string()))
-}
 trait SourceNumber {
     fn source_number(&self) -> Result<Option<f64>>;
 }
@@ -135,6 +132,7 @@ fn required_timestamp(value: Option<&str>) -> Result<Option<prost_types::Timesta
         .ok_or_else(|| invalid("missing timestamp"))
 }
 fn metadata(mut metadata: SourceMetadata, update: Option<&str>) -> Result<Option<SourceMetadata>> {
+    metadata.fetched_at = Some(std::time::SystemTime::now().into());
     metadata.upstream_updated_at = timestamp(update)?;
     Ok(Some(metadata))
 }
@@ -155,12 +153,23 @@ fn coordinates(
         _ => Err(invalid("invalid coordinates")),
     }
 }
-pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> Result<Payload> {
+pub(crate) async fn fetch(
+    client: &ipma_open_data_client::Client,
+    key: Key,
+    metadata_value: SourceMetadata,
+) -> Result<Payload> {
     Ok(match key {
         Key::WeatherLocation(_) | Key::WeatherDay(_) => {
             let (rows, location_id, fallback_date, update) = match key {
-                Key::WeatherLocation(_) => {
-                    let root: up::CityDailyForecastResponse = parse(body)?;
+                Key::WeatherLocation(location) => {
+                    let root = client
+                        .get_city_daily_forecast(
+                            u64::from(location)
+                                .try_into()
+                                .map_err(|_| invalid("invalid location"))?,
+                        )
+                        .await?
+                        .into_inner();
                     let fallback = root
                         .extra
                         .get("forecastDate")
@@ -173,10 +182,14 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
                         root.data_update,
                     )
                 }
-                _ => {
-                    let root: up::DailyForecastResponse = parse(body)?;
+                Key::WeatherDay(day) => {
+                    let root = client
+                        .get_daily_forecasts(i64::from(day))
+                        .await?
+                        .into_inner();
                     (root.data, None, Some(root.forecast_date), root.data_update)
                 }
+                _ => unreachable!(),
             };
             let meta = metadata(metadata_value, update.as_deref())?;
             let mut forecasts = Vec::new();
@@ -217,7 +230,7 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
             })
         }
         Key::Warnings => {
-            let root: Vec<up::Warning> = parse(body)?;
+            let root = client.get_warnings().await?.into_inner();
             let meta = metadata(metadata_value, None)?;
             let warnings = root
                 .iter()
@@ -244,7 +257,7 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
             })
         }
         Key::Observations => {
-            let root: up::ObservationsResponse = parse(body)?;
+            let root = client.get_observations().await?.into_inner();
             let meta = metadata(metadata_value, None)?;
             let mut observations = Vec::new();
             let times: std::collections::BTreeMap<_, _> = root.iter().collect();
@@ -280,8 +293,8 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
                 observations,
             })
         }
-        Key::Sea(_) => {
-            let root: up::SeaForecastResponse = parse(body)?;
+        Key::Sea(day) => {
+            let root = client.get_sea_forecasts(i64::from(day)).await?.into_inner();
             let meta = metadata(metadata_value, root.data_update.as_deref())?;
             let forecasts = root
                 .data
@@ -312,8 +325,8 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
                 forecasts,
             })
         }
-        Key::Fire(_) => {
-            let root: up::FireRiskResponse = parse(body)?;
+        Key::Fire(day) => {
+            let root = client.get_fire_risk(i64::from(day)).await?.into_inner();
             let meta = metadata(metadata_value, root.file_date.as_deref())?;
             let municipalities: std::collections::BTreeMap<_, _> = root.local.iter().collect();
             let risks = municipalities
@@ -337,7 +350,7 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
             })
         }
         Key::Uv => {
-            let root: Vec<up::UvForecast> = parse(body)?;
+            let root = client.get_uv_forecasts().await?.into_inner();
             let meta = metadata(metadata_value, None)?;
             let forecasts = root
                 .iter()
@@ -362,8 +375,15 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
                 forecasts,
             })
         }
-        Key::Seismic(_) => {
-            let root: up::SeismicResponse = parse(body)?;
+        Key::Seismic(area) => {
+            let root = client
+                .get_seismic_events(
+                    &i64::from(area)
+                        .try_into()
+                        .map_err(|_| invalid("invalid seismic area"))?,
+                )
+                .await?
+                .into_inner();
             let meta = metadata(
                 metadata_value,
                 root.data_update.as_deref().or(root.update_date.as_deref()),
@@ -407,10 +427,10 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
         }
         Key::Locations(kind) => {
             let (rows, update) = if kind == 1 {
-                let root: up::LocationsResponse = parse(body)?;
+                let root = client.get_locations().await?.into_inner();
                 (root.data, root.data_update)
             } else {
-                (parse::<Vec<up::Location>>(body)?, None)
+                (client.get_sea_locations().await?.into_inner(), None)
             };
             let meta = metadata(metadata_value, update.as_deref())?;
             let locations = rows
@@ -454,7 +474,7 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
         Key::Codes(kind) => {
             let (rows, update) = match kind {
                 1 => {
-                    let root: up::WeatherCodeResponse = parse(body)?;
+                    let root = client.get_weather_codes().await?.into_inner();
                     (
                         root.data
                             .into_iter()
@@ -470,7 +490,7 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
                     )
                 }
                 2 => {
-                    let root: up::WindCodeResponse = parse(body)?;
+                    let root = client.get_wind_codes().await?.into_inner();
                     (
                         root.data
                             .into_iter()
@@ -488,7 +508,7 @@ pub(crate) fn decode(key: Key, body: &[u8], metadata_value: SourceMetadata) -> R
                     )
                 }
                 _ => {
-                    let root: up::PrecipitationCodeResponse = parse(body)?;
+                    let root = client.get_precipitation_codes().await?.into_inner();
                     (
                         root.data
                             .into_iter()
