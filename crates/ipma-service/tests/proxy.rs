@@ -584,6 +584,13 @@ async fn upstream_errors_are_mapped_and_each_call_is_forwarded() {
         (
             StatusCode::OK,
             Some(
+                r#"[{"idAreaAviso":"A","awarenessTypeName":"Rain","awarenessLevelID":"yellow","startTime":"2026-11-10T00:00:00","endTime":"2026-11-11T00:00:00","text":true}]"#,
+            ),
+            Code::DataLoss,
+        ),
+        (
+            StatusCode::OK,
+            Some(
                 r#"[{"idAreaAviso":"A","awarenessTypeName":"Rain","awarenessLevelID":"yellow","startTime":"bad","endTime":"bad"}]"#,
             ),
             Code::DataLoss,

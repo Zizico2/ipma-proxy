@@ -89,17 +89,6 @@ fn numeric(v: &Value) -> Result<Option<f64>> {
 fn number(v: &Value, key: &str) -> Result<Option<f64>> {
     Ok(numeric(&v[key])?.filter(|n| *n != -99.0))
 }
-fn integer(v: &Value, key: &str) -> Result<Option<i32>> {
-    number(v, key)?
-        .map(|n| {
-            if n.fract() == 0.0 && n >= f64::from(i32::MIN) && n <= f64::from(i32::MAX) {
-                Ok(n as i32)
-            } else {
-                Err(invalid(format!("invalid integer field {key}")))
-            }
-        })
-        .transpose()
-}
 fn unsigned(v: &Value, key: &str) -> Result<Option<u32>> {
     number(v, key)?
         .map(|n| {
@@ -111,29 +100,8 @@ fn unsigned(v: &Value, key: &str) -> Result<Option<u32>> {
         })
         .transpose()
 }
-fn id(v: &Value, key: &str) -> Result<u32> {
-    unsigned(v, key)?
-        .filter(|n| *n > 0)
-        .ok_or_else(|| invalid(format!("missing identifier {key}")))
-}
-fn coordinates(v: &Value, lat: &str, lon: &str) -> Result<Option<Coordinates>> {
-    match (number(v, lat)?, number(v, lon)?) {
-        (Some(latitude), Some(longitude))
-            if (-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude) =>
-        {
-            Ok(Some(Coordinates {
-                latitude,
-                longitude,
-            }))
-        }
-        (None, None) => Ok(None),
-        _ => Err(invalid("invalid coordinates")),
-    }
-}
-fn date(v: &Value) -> Result<Date> {
-    parse_date(v.as_str().ok_or_else(|| invalid("missing date"))?)
-}
-fn parse_date(s: &str) -> Result<Date> {
+
+pub(crate) fn parse_date(s: &str) -> Result<Date> {
     let d = NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| invalid("invalid date"))?;
     Ok(Date {
         year: d.year(),
@@ -141,15 +109,8 @@ fn parse_date(s: &str) -> Result<Date> {
         day: d.day(),
     })
 }
-fn timestamp(v: &Value) -> Result<Option<prost_types::Timestamp>> {
-    match v {
-        Value::Null => Ok(None),
-        Value::String(s) if s.is_empty() => Ok(None),
-        Value::String(s) => parse_timestamp(s).map(Some),
-        _ => Err(invalid("invalid timestamp")),
-    }
-}
-fn parse_timestamp(s: &str) -> Result<prost_types::Timestamp> {
+
+pub(crate) fn parse_timestamp(s: &str) -> Result<prost_types::Timestamp> {
     if let Ok(t) = chrono::DateTime::parse_from_rfc3339(s) {
         return Ok(prost_types::Timestamp {
             seconds: t.timestamp(),
@@ -171,336 +132,44 @@ fn parse_timestamp(s: &str) -> Result<prost_types::Timestamp> {
     }
     Err(invalid("invalid timestamp"))
 }
-fn required_timestamp(v: &Value) -> Result<Option<prost_types::Timestamp>> {
-    timestamp(v)?
-        .map(Some)
-        .ok_or_else(|| invalid("missing timestamp"))
-}
 
 pub(crate) fn decode(key: Key, body: &[u8], mut metadata: SourceMetadata) -> Result<Payload> {
-    if let Key::Climate(dataset) = key {
-        return climate(dataset, body, metadata).map(Payload::Climate);
-    }
-    let mut root: Value = serde_json::from_slice(body).map_err(|e| invalid(e.to_string()))?;
-    if matches!(key, Key::Geo(2)) {
-        // IPMA serves the station list as an array of GeoJSON Features.
-        array(&root)?;
-        root = serde_json::json!({"type": "FeatureCollection", "features": root});
-    }
-    for field in ["dataUpdate", "updateDate", "fileDate"] {
-        if !root[field].is_null() {
-            metadata.upstream_updated_at = timestamp(&root[field])?;
-            break;
-        }
-    }
-    let meta = Some(metadata);
-    Ok(match key {
-        Key::WeatherLocation(_) | Key::WeatherDay(_) => {
-            let mut forecasts = Vec::new();
-            for v in array(&root["data"])? {
-                object(v)?;
-                let weather_type_code = integer(v, "idWeatherType")?;
-                let wind_speed_class = integer(v, "classWindSpeed")?;
-                let precipitation_intensity_class = integer(v, "classPrecInt")?;
-                let prevailing_wind_direction = text(v, "predWindDir")?;
-                let location_id = if matches!(key, Key::WeatherLocation(_)) {
-                    id(&root, "globalIdLocal")?
-                } else {
-                    id(v, "globalIdLocal")?
-                };
-                forecasts.push(WeatherForecast {
-                    location: classification::location(Some(location_id)),
-                    location_id,
-                    date: Some(date(if v["forecastDate"].is_null() {
-                        &root["forecastDate"]
-                    } else {
-                        &v["forecastDate"]
-                    })?),
-                    coordinates: coordinates(v, "latitude", "longitude")?,
-                    minimum_temperature_celsius: number(v, "tMin")?,
-                    maximum_temperature_celsius: number(v, "tMax")?,
-                    precipitation_probability_percent: number(v, "precipitaProb")?,
-                    weather_type: classification::weather_type(weather_type_code),
-                    wind_speed_classification: classification::wind_speed(wind_speed_class),
-                    precipitation_intensity: classification::precipitation(
-                        precipitation_intensity_class,
-                    ),
-                    wind_direction: classification::direction_text(&prevailing_wind_direction),
-                    prevailing_wind_direction,
-                    weather_type_code,
-                    wind_speed_class,
-                    precipitation_intensity_class,
-                });
-            }
-            Payload::Weather(GetWeatherForecastResponse {
-                metadata: meta,
-                forecasts,
-            })
-        }
-        Key::Warnings => {
-            let warnings = array(&root)?
-                .iter()
-                .map(|v| {
-                    object(v)?;
-                    let type_name = string(&v["awarenessTypeName"])?;
-                    let level = string(&v["awarenessLevelID"])?;
-                    let area_id = string(&v["idAreaAviso"])?;
-                    Ok(Warning {
-                        area: classification::warning_area(&area_id),
-                        area_id,
-                        warning_type: classification::warning_type(&type_name),
-                        warning_level: classification::warning_level(&level),
-                        type_name,
-                        level,
-                        text: text(v, "text")?,
-                        starts_at: required_timestamp(&v["startTime"])?,
-                        ends_at: required_timestamp(&v["endTime"])?,
-                    })
-                })
-                .collect::<Result<_>>()?;
-            Payload::Warnings(GetWarningsResponse {
-                metadata: meta,
-                warnings,
-            })
-        }
-        Key::Observations => {
-            let mut observations = Vec::new();
-            for (time, stations) in object(&root)? {
-                let observed_at = Some(parse_timestamp(time)?);
-                for (station, v) in object(stations)? {
-                    if v.is_null() {
-                        continue;
-                    }
-                    object(v)?;
-                    let station_id = station
-                        .parse::<u32>()
-                        .ok()
-                        .filter(|id| *id > 0)
-                        .ok_or_else(|| invalid("invalid station ID"))?;
-                    let wind_direction_code = integer(v, "idDireccVento")?;
-                    observations.push(Observation {
-                        station: classification::station(Some(station_id)),
-                        station_id,
-                        observed_at,
-                        temperature_celsius: number(v, "temperatura")?,
-                        wind_speed_meters_per_second: number(v, "intensidadeVento")?,
-                        wind_speed_kilometers_per_hour: number(v, "intensidadeVentoKM")?,
-                        wind_direction: classification::direction_code(wind_direction_code),
-                        wind_direction_code,
-                        precipitation_millimeters: number(v, "precAcumulada")?,
-                        relative_humidity_percent: number(v, "humidade")?,
-                        sea_level_pressure_hectopascals: number(v, "pressao")?,
-                        solar_radiation_kilojoules_per_square_meter: number(v, "radiacao")?,
-                    });
+    match key {
+        Key::Climate(dataset) => climate(dataset, body, metadata).map(Payload::Climate),
+        Key::Geo(dataset) => {
+            let mut root: Value =
+                serde_json::from_slice(body).map_err(|e| invalid(e.to_string()))?;
+            let features = if dataset == 2 {
+                let features: Vec<ipma_open_data_client::types::GeoFeature> =
+                    serde_json::from_slice(body).map_err(|e| invalid(e.to_string()))?;
+                root = serde_json::json!({"type":"FeatureCollection","features":root});
+                features
+            } else {
+                let collection: ipma_open_data_client::types::GeoFeatureCollection =
+                    serde_json::from_slice(body).map_err(|e| invalid(e.to_string()))?;
+                collection.features
+            };
+            // Preserve collection update metadata alongside the source GeoJSON.
+            for field in ["dataUpdate", "updateDate", "fileDate"] {
+                if !root[field].is_null() {
+                    metadata.upstream_updated_at = match root[field].as_str() {
+                        Some("") => None,
+                        Some(value) => Some(parse_timestamp(value)?),
+                        None => return Err(invalid("invalid timestamp")),
+                    };
+                    break;
                 }
             }
-            Payload::Observations(GetObservationsResponse {
-                metadata: meta,
-                observations,
-            })
+            Ok(Payload::Geo(GetGeoDatasetResponse {
+                feature_categories: geo_categories(dataset, &features)?,
+                metadata: Some(metadata),
+                geobuf: geojson_geobuf::encode(&root)
+                    .map_err(|e| invalid(e.to_string()))?
+                    .into(),
+            }))
         }
-        Key::Sea(_) => {
-            let forecasts = array(&root["data"])?
-                .iter()
-                .map(|v| {
-                    object(v)?;
-                    let prevailing_wave_direction = text(v, "predWaveDir")?;
-                    let location_id = id(v, "globalIdLocal")?;
-                    Ok(SeaForecast {
-                        location: classification::location(Some(location_id)),
-                        location_id,
-                        coordinates: coordinates(v, "latitude", "longitude")?,
-                        minimum_wave_period_seconds: number(v, "wavePeriodMin")?,
-                        maximum_wave_period_seconds: number(v, "wavePeriodMax")?,
-                        minimum_swell_height_meters: number(v, "waveHighMin")?,
-                        maximum_swell_height_meters: number(v, "waveHighMax")?,
-                        minimum_significant_wave_height_meters: number(v, "totalSeaMin")?,
-                        maximum_significant_wave_height_meters: number(v, "totalSeaMax")?,
-                        minimum_sea_surface_temperature_celsius: number(v, "sstMin")?,
-                        maximum_sea_surface_temperature_celsius: number(v, "sstMax")?,
-                        wave_direction: classification::direction_text(&prevailing_wave_direction),
-                        prevailing_wave_direction,
-                    })
-                })
-                .collect::<Result<_>>()?;
-            Payload::Sea(GetSeaForecastResponse {
-                metadata: meta,
-                date: Some(date(&root["forecastDate"])?),
-                forecasts,
-            })
-        }
-        Key::Fire(_) => {
-            let risks = object(&root["local"])?
-                .iter()
-                .map(|(municipality_id, v)| {
-                    object(v)?;
-                    object(&v["data"])?;
-                    let risk_class = integer(&v["data"], "rcm")?;
-                    Ok(FireRisk {
-                        municipality: classification::municipality(municipality_id, None, None),
-                        municipality_id: municipality_id.clone(),
-                        coordinates: coordinates(v, "latitude", "longitude")?,
-                        classification: classification::fire_risk(risk_class),
-                        risk_class,
-                    })
-                })
-                .collect::<Result<_>>()?;
-            Payload::Fire(GetFireRiskResponse {
-                metadata: meta,
-                forecast_date: Some(date(&root["dataPrev"])?),
-                model_run_date: Some(date(&root["dataRun"])?),
-                risks,
-            })
-        }
-        Key::Uv => {
-            let forecasts = array(&root)?
-                .iter()
-                .map(|v| {
-                    object(v)?;
-                    let location_id = unsigned(v, "globalIdLocal")?
-                        .ok_or_else(|| invalid("missing UV location ID"))?;
-                    let period_code = integer(v, "idPeriodo")?;
-                    let peak_hour_interval = text(v, "intervaloHora")?;
-                    Ok(UvForecast {
-                        location: classification::location(Some(location_id)),
-                        period: classification::uv_period(period_code, &peak_hour_interval),
-                        location_id,
-                        date: Some(date(&v["data"])?),
-                        index: number(v, "iUv")?,
-                        peak_hour_interval,
-                        period_code,
-                    })
-                })
-                .collect::<Result<_>>()?;
-            Payload::Uv(GetUvForecastResponse {
-                metadata: meta,
-                forecasts,
-            })
-        }
-        Key::Seismic(_) => {
-            let events = array(&root["data"])?
-                .iter()
-                .map(|v| {
-                    object(v)?;
-                    let sensed = match &v["sensed"] {
-                        Value::Null => None,
-                        Value::Bool(b) => Some(*b),
-                        _ => return Err(invalid("invalid sensed flag")),
-                    };
-                    let magnitude_type = text(v, "magType")?;
-                    let degree = optional_text(v, "degree")?;
-                    let source = text(v, "source")?;
-                    Ok(SeismicEvent {
-                        magnitude_classification: classification::magnitude_type(&magnitude_type),
-                        intensity: classification::seismic_degree(
-                            degree.as_deref().unwrap_or_default(),
-                        ),
-                        reporting_source: classification::seismic_source(&source),
-                        occurred_at: required_timestamp(&v["time"])?,
-                        coordinates: coordinates(v, "lat", "lon")?,
-                        magnitude: number(v, "magnitud")?,
-                        magnitude_type,
-                        depth_kilometers: number(v, "depth")?,
-                        observation_region: text(v, "obsRegion")?,
-                        locality: optional_text(v, "local")?,
-                        degree,
-                        source,
-                        shakemap_id: text(v, "shakemapid")?,
-                        updated_at: timestamp(&v["dataUpdate"])?,
-                        event_id: optional_text(v, "sismoId")?,
-                        sensed,
-                        google_map_reference: optional_text(v, "googlemapref")?,
-                        tensor_reference: optional_text(v, "tensorRef")?,
-                    })
-                })
-                .collect::<Result<_>>()?;
-            Payload::Seismic(GetSeismicEventsResponse {
-                metadata: meta,
-                events,
-            })
-        }
-        Key::Locations(kind) => {
-            let locations = array(if kind == 1 { &root["data"] } else { &root })?
-                .iter()
-                .map(|v| {
-                    object(v)?;
-                    let district_id = unsigned(v, "idDistrito")?;
-                    let municipality_code = unsigned(v, "idConcelho")?;
-                    // idConcelho is scoped by idDistrito. Only compose a DICO
-                    // when both components are present; retain partial components.
-                    let dico = match (district_id, municipality_code) {
-                        (Some(d), Some(c)) => format!("{d:02}{c:02}"),
-                        _ => String::new(),
-                    };
-                    Ok(Location {
-                        location: classification::location(Some(id(v, "globalIdLocal")?)),
-                        warning_area: classification::warning_area(&text(v, "idAreaAviso")?),
-                        region: classification::region(unsigned(v, "idRegiao")?),
-                        district: classification::district(district_id),
-                        municipality: classification::municipality(
-                            &dico,
-                            district_id,
-                            municipality_code,
-                        ),
-                        coastal_location: classification::coastal_location(unsigned(v, "idLocal")?),
-                        location_id: id(v, "globalIdLocal")?,
-                        name: string(&v["local"])?,
-                        coordinates: coordinates(v, "latitude", "longitude")?,
-                        warning_area_id: text(v, "idAreaAviso")?,
-                        region_id: unsigned(v, "idRegiao")?,
-                        district_id,
-                        municipality_code,
-                        local_code: unsigned(v, "idLocal")?,
-                    })
-                })
-                .collect::<Result<_>>()?;
-            Payload::Locations(GetLocationsResponse {
-                metadata: meta,
-                locations,
-            })
-        }
-        Key::Codes(kind) => {
-            let (code, pt, en) = match kind {
-                1 => ("idWeatherType", "descWeatherTypePT", "descWeatherTypeEN"),
-                2 => (
-                    "classWindSpeed",
-                    "descClassWindSpeedDailyPT",
-                    "descClassWindSpeedDailyEN",
-                ),
-                _ => ("classPrecInt", "descClassPrecIntPT", "descClassPrecIntEN"),
-            };
-            let entries = array(&root["data"])?
-                .iter()
-                .map(|v| {
-                    object(v)?;
-                    let n = numeric(&v[code])?.ok_or_else(|| invalid("missing reference code"))?;
-                    if n.fract() != 0.0 || n < f64::from(i32::MIN) || n > f64::from(i32::MAX) {
-                        return Err(invalid("invalid reference code"));
-                    }
-                    Ok(CodeEntry {
-                        code: n as i32,
-                        classification: Some(classification::code_entry_classification(
-                            kind, n as i32,
-                        )),
-                        description_portuguese: string(&v[pt])?,
-                        description_english: string(&v[en])?,
-                    })
-                })
-                .collect::<Result<_>>()?;
-            Payload::Codes(GetCodeTableResponse {
-                metadata: meta,
-                entries,
-            })
-        }
-        Key::Geo(dataset) => Payload::Geo(GetGeoDatasetResponse {
-            feature_categories: geo_categories(dataset, &root)?,
-            metadata: meta,
-            geobuf: geojson_geobuf::encode(&root)
-                .map_err(|e| invalid(e.to_string()))?
-                .into(),
-        }),
-        Key::Climate(_) => unreachable!("handled before JSON parsing"),
-    })
+        _ => crate::typed::decode(key, body, metadata),
+    }
 }
 
 fn climate(dataset: i32, body: &[u8], metadata: SourceMetadata) -> Result<GetClimateResponse> {
@@ -596,12 +265,20 @@ fn climate(dataset: i32, body: &[u8], metadata: SourceMetadata) -> Result<GetCli
 
 /// Build typed companions without changing the feature sequence or properties
 /// passed to Geobuf. Only information present in this response is used.
-fn geo_categories(dataset: i32, root: &Value) -> Result<Vec<GeoFeatureCategories>> {
-    array(&root["features"])?
+fn geo_categories(
+    dataset: i32,
+    features: &[ipma_open_data_client::types::GeoFeature],
+) -> Result<Vec<GeoFeatureCategories>> {
+    features
         .iter()
         .enumerate()
         .map(|(index, feature)| {
-            let properties = &feature["properties"];
+            let properties = feature
+                .properties
+                .as_ref()
+                .map(|p| Value::Object(p.clone()))
+                .unwrap_or(Value::Null);
+            let properties = &properties;
             // GeoJSON permits null properties; there are no categories to map.
             if properties.is_null() {
                 return Ok(None);
